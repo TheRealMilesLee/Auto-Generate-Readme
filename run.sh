@@ -52,8 +52,21 @@ handle_error() {
 
 # 清理函数
 cleanup() {
+  # 清理分析报告临时文件
   if [[ -n "${TEMP_ANALYSIS_FILE:-}" && -f "$TEMP_ANALYSIS_FILE" ]]; then
     rm -f "$TEMP_ANALYSIS_FILE"
+  fi
+
+  # 清理其他可能的临时文件
+  if [[ -n "${TEMP_FILES:-}" ]]; then
+    for temp_file in "${TEMP_FILES[@]}"; do
+      [[ -f "$temp_file" ]] && rm -f "$temp_file"
+    done
+  fi
+
+  # 清理写入过程中的临时文件
+  if [[ -n "${OUTPUT_FILE:-}" ]]; then
+    rm -f "${OUTPUT_FILE}".tmp.*
   fi
 }
 
@@ -434,23 +447,33 @@ analyze_project() {
   # 创建分析报告（使用安全的临时文件）
   TEMP_ANALYSIS_FILE=$(mktemp /tmp/project_analysis_XXXXXX.txt)
 
-  cat >"$TEMP_ANALYSIS_FILE" <<EOF
-项目分析报告
-=============
+  # 分别获取各部分内容，避免在 here document 中使用命令替换
+  local directory_structure file_types important_files languages
 
-项目名称: $project_name
-项目路径: $dir
-分析时间: $(date '+%Y-%m-%d %H:%M:%S')
+  # 重定向 stderr 以避免日志输出干扰
+  directory_structure=$(get_directory_structure "$dir" 2>/dev/null || echo "  - 无法获取目录结构")
+  file_types=$(get_file_types "$dir" 2>/dev/null || echo "  - 无法获取文件类型")
+  important_files=$(get_important_files "$dir" 2>/dev/null || echo "  - 无法获取重要文件")
+  languages=$(analyze_languages "$dir" 2>/dev/null || echo "  - 无法分析编程语言")
 
-$(get_directory_structure "$dir")
+  # 使用 printf 而不是 here document 来避免特殊字符问题
+  {
+    printf "项目分析报告\n"
+    printf "=============\n\n"
+    printf "项目名称: %s\n" "$project_name"
+    printf "项目路径: %s\n" "$dir"
+    printf "分析时间: %s\n\n" "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf "%s\n\n" "$directory_structure"
+    printf "%s\n\n" "$file_types"
+    printf "%s\n\n" "$important_files"
+    printf "%s\n\n" "$languages"
+  } >"$TEMP_ANALYSIS_FILE"
 
-$(get_file_types "$dir")
-
-$(get_important_files "$dir")
-
-$(analyze_languages "$dir")
-
-EOF
+  # 验证文件是否成功创建
+  if [[ ! -f "$TEMP_ANALYSIS_FILE" || ! -s "$TEMP_ANALYSIS_FILE" ]]; then
+    log_error "创建分析报告失败"
+    return 1
+  fi
 
   echo "$TEMP_ANALYSIS_FILE"
 }
