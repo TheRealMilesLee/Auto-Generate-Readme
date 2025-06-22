@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run README Generator",
+			"type": "shell",
+			"command": "C:/Users/SilverhandMiles/AppData/Local/Microsoft/WindowsApps/python3.12.exe",
+			"args": [
+				"main.py",
+				"--help"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}

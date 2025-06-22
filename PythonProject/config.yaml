@@ -1,0 +1,38 @@
+# README 生成器配置
+project_name: ""
+project_description: ""
+author: ""
+license: "MIT"
+python_version: "3.8+"
+
+# 路径配置
+project_root: "."
+output_path: "README.md"
+template_path: ""
+
+# 功能开关
+include_badges: true
+include_toc: true
+include_installation: true
+include_usage: true
+include_api_docs: false
+include_contributing: true
+include_changelog: false
+
+# Git 配置
+git_auto_detect: true
+github_username: ""
+repository_name: ""
+
+# 自定义章节
+custom_sections: []
+  # - title: "自定义章节"
+  #   content: "章节内容"
+
+# 排除文件
+exclude_files:
+  - ".git"
+  - "__pycache__"
+  - ".vscode"
+  - "node_modules"
+  - ".pytest_cache"
