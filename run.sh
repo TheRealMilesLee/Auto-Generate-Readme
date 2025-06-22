@@ -717,40 +717,29 @@ generate_chinese_readme() {
     log_info "生成中文版 README..."
   } >&2
 
-  local prompt="你是一个专业的软件文档编写专家。根据以下项目分析，请生成一个完整且结构良好的 README.md 文件。
+  local prompt="直接生成README.md文件内容，不要任何解释文字。
 
-关键要求：
-- 只输出纯 Markdown 内容，不要任何解释、思考过程或额外文字
-- 直接以 markdown 内容开始（例如：# 项目标题）
-- 不要包含任何关于 README 的元评论、解释或思考过程
-- 不要用代码块或其他格式包装内容
-- 只生成可以直接保存的实际 README.md 文件内容
-- 不要包含任何 ANSI 颜色代码或控制字符
-- 不要包含任何思考过程，如"思考中..."或"...思考完成"
+必须严格遵守：
+- 立即开始输出README内容，第一行就是项目标题（# 项目名称）
+- 绝对不要输出"好的"、"我现在需要"、"让我来"等任何解释性文字
+- 绝对不要输出思考过程或元评论
+- 只输出可以直接保存为README.md的纯Markdown内容
+- 不要包装在代码块中
 
-README 应该包含：
-1. 项目标题和简要描述
+README包含这些部分：
+1. 项目标题和描述
 2. 功能特性
-3. 安装说明（包括 iOS/macOS 项目的 Xcode 设置）
+3. 安装说明
 4. 使用示例
-5. 项目结构说明
-6. 依赖要求（包括 iOS/macOS 项目的 CocoaPods、SPM、Carthage）
+5. 项目结构
+6. 依赖要求
 7. 贡献指南
 8. 许可证信息
-
-对于 Xcode 项目，请包含：
-- iOS/macOS 部署目标
-- Xcode 版本要求
-- Swift 版本兼容性
-- CocoaPods/Swift Package Manager 设置说明
-- 构建和运行说明
-
-使用标准的 Markdown 格式。让 README 内容丰富、专业且易于理解。
 
 项目分析：
 $(cat "$analysis_file")
 
-只生成完整的 README.md 内容（纯 Markdown，无解释）："
+现在直接开始输出README内容："
 
   local readme_content
   # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉所有可能的杂质
@@ -763,6 +752,26 @@ $(cat "$analysis_file")
       grep -v '\.\.\.done thinking\.' |
       grep -v '^思考中\.\.\.' |
       grep -v '^\.\.\.思考完成\.' |
+      # 移除常见的中文解释性开头
+      grep -v '^好的' |
+      grep -v '^我现在需要' |
+      grep -v '^让我来' |
+      grep -v '^我将' |
+      grep -v '^我会' |
+      grep -v '^我需要' |
+      grep -v '^根据您的要求' |
+      grep -v '^根据项目分析' |
+      grep -v '^基于以上分析' |
+      grep -v '^现在我来' |
+      grep -v '^首先' |
+      grep -v '^接下来' |
+      grep -v '^以下是' |
+      grep -v '^下面是' |
+      grep -v '^这里是' |
+      grep -v '^这个README' |
+      grep -v '处理用户的请求' |
+      grep -v '生成一个符合要求' |
+      grep -v '巴拉巴拉' |
       # 移除常见的元评论开头
       grep -v '^根据\|^我将\|^以下是\|^这个README' |
       grep -v '^让我\|^我会\|^我已经\|^下面是\|^这里是' |
@@ -772,6 +781,12 @@ $(cat "$analysis_file")
       sed '/^```markdown$/,/^```$/{/^```markdown$/d; /^```$/d;}' |
       # 移除末尾孤立的 ``` 行
       sed '${/^```$/d;}' |
+      # 移除包含"处理"、"需要"、"生成"等词的解释性句子开头
+      grep -v '^.*处理.*请求' |
+      grep -v '^.*需要.*生成' |
+      grep -v '^.*符合要求' |
+      # 只保留以 # 开头或者明显是 Markdown 内容的行，跳过第一个非 Markdown 行
+      awk 'BEGIN{found_md=0} /^#/ {found_md=1; print; next} found_md==1 {print} found_md==0 && /^[^#]/ && !/^$/ {next} {print}' |
       # 移除可能的控制字符
       tr -d '\r'
   ); then
