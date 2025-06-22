@@ -23,6 +23,7 @@ show_help() {
   echo "  -m, --model    指定 Ollama 模型 (默认: qwen2.5:7b)"
   echo "  -o, --output   指定输出文件路径 (默认: <目标文件夹>/README.md)"
   echo "  -l, --lang     指定默认显示语言 (english/chinese, 默认: english)"
+  echo "  -f, --force    强制重新生成，忽略现有 README 文件"
   echo ""
   echo "注意: 无论选择哪种语言，都会生成包含中英文双语版本的 README 文件"
   echo "      指定的语言将作为默认显示在前面的版本"
@@ -31,12 +32,14 @@ show_help() {
   echo "  $0 /path/to/project"
   echo "  $0 /path/to/project -m llama3:8b -l chinese"
   echo "  $0 /path/to/project -o /custom/path/README.md"
+  echo "  $0 /path/to/project -f  # 强制重新生成"
 }
 
 # 默认参数
 OLLAMA_MODEL="qwen2.5:7b"
 OUTPUT_FILE=""
 LANGUAGE="english" # 默认英文在前
+FORCE=false        # 默认不强制重新生成
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -56,6 +59,10 @@ while [[ $# -gt 0 ]]; do
   -l | --lang)
     LANGUAGE="$2"
     shift 2
+    ;;
+  -f | --force)
+    FORCE=true
+    shift
     ;;
   -*)
     echo -e "${RED}错误: 未知选项 $1${NC}"
@@ -308,6 +315,73 @@ $(cat "$analysis_file")
   fi
 }
 
+# 检查是否已存在合适的 README 文件
+check_existing_readme() {
+  local dir="$1"
+  local readme_files=("README.md" "readme.md" "README.txt" "readme.txt" "README.rst" "readme.rst" "Readme.md" "ReadMe.MD" "README.MD")
+
+  echo -e "${BLUE}检查现有 README 文件...${NC}"
+
+  for readme_file in "${readme_files[@]}"; do
+    local readme_path="$dir/$readme_file"
+    if [[ -f "$readme_path" ]]; then
+      echo -e "${YELLOW}发现现有 README 文件: $readme_file${NC}"
+
+      # 检查文件大小（字节数）
+      local file_size=$(wc -c <"$readme_path" 2>/dev/null || echo 0)
+
+      # 检查行数
+      local line_count=$(wc -l <"$readme_path" 2>/dev/null || echo 0)
+
+      # 检查非空行数（排除只有空白字符的行）
+      local non_empty_lines=$(grep -c '[^[:space:]]' "$readme_path" 2>/dev/null || echo 0)
+
+      # 检查字符数（排除空白字符）
+      local char_count=$(tr -d '[:space:]' <"$readme_path" | wc -c 2>/dev/null || echo 0)
+
+      echo -e "${BLUE}文件分析:${NC}"
+      echo -e "  文件大小: $file_size 字节"
+      echo -e "  总行数: $line_count 行"
+      echo -e "  非空行数: $non_empty_lines 行"
+      echo -e "  有效字符数: $char_count 个"
+
+      # 判断是否为简单的 README（满足以下任一条件则认为需要重新生成）:
+      # 1. 文件大小小于 200 字节
+      # 2. 非空行数少于 5 行
+      # 3. 有效字符数少于 100 个
+      # 4. 只有标题和简单描述（检查是否只有 1-2 个 # 开头的行）
+
+      if [[ $file_size -lt 200 || $non_empty_lines -lt 5 || $char_count -lt 100 ]]; then
+        echo -e "${YELLOW}README 内容过于简单，将重新生成${NC}"
+        return 1 # 需要重新生成
+      fi
+
+      # 检查是否只有标题行
+      local title_lines=$(grep -c '^#' "$readme_path" 2>/dev/null || echo 0)
+      if [[ $title_lines -eq $non_empty_lines && $non_empty_lines -le 2 ]]; then
+        echo -e "${YELLOW}README 只包含标题，将重新生成${NC}"
+        return 1 # 需要重新生成
+      fi
+
+      # 显示 README 前几行内容供用户参考
+      echo -e "${BLUE}现有 README 内容预览:${NC}"
+      echo -e "${GREEN}----------------------------------------${NC}"
+      head -n 10 "$readme_path" | sed 's/^/  /'
+      if [[ $line_count -gt 10 ]]; then
+        echo -e "  ..."
+        echo -e "  (还有 $((line_count - 10)) 行)"
+      fi
+      echo -e "${GREEN}----------------------------------------${NC}"
+
+      echo -e "${GREEN}✓ 发现完整的 README 文件，跳过生成${NC}"
+      return 0 # 不需要重新生成
+    fi
+  done
+
+  echo -e "${YELLOW}未发现 README 文件，将生成新的 README${NC}"
+  return 1 # 需要生成
+}
+
 # 生成双语 README 内容
 generate_readme() {
   local analysis_file="$1"
@@ -361,7 +435,18 @@ main() {
   echo -e "${GREEN}=== Auto-Generate-Readme Tool ===${NC}"
   echo ""
 
-  # 检查 Ollama
+  # 如果不是强制模式，检查是否已存在合适的 README 文件
+  if [[ "$FORCE" != "true" ]]; then
+    if check_existing_readme "$TARGET_DIR"; then
+      echo -e "${GREEN}✓ 已存在合适的 README 文件，跳过生成${NC}"
+      echo -e "${YELLOW}💡 提示: 使用 -f 或 --force 参数可强制重新生成${NC}"
+      exit 0
+    fi
+  else
+    echo -e "${YELLOW}🔄 强制模式：将重新生成 README 文件${NC}"
+  fi
+
+  # 检查 Ollama（只有在需要生成时才检查）
   check_ollama
 
   # 分析项目
