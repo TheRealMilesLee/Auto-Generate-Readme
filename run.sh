@@ -624,7 +624,11 @@ analyze_project() {
 # 生成英文 README 内容
 generate_english_readme() {
   local analysis_file="$1"
-  log_info "生成英文版 README..."
+
+  # 将日志输出重定向到 stderr
+  {
+    log_info "生成英文版 README..."
+  } >&2
 
   local prompt="You are a professional software documentation writer. Based on the following project analysis, please generate a comprehensive and well-structured README.md file.
 
@@ -634,6 +638,8 @@ CRITICAL REQUIREMENTS:
 - Do not include any meta-commentary, explanations, or thinking process about the README
 - Do not wrap the content in code blocks or any other formatting
 - Generate ONLY the actual README.md file content that can be directly saved
+- Do not include any ANSI color codes or control characters
+- Do not include any thinking process like 'Thinking...' or '...done thinking.'
 
 The README should include:
 1. Project title and brief description
@@ -660,19 +666,44 @@ $(cat "$analysis_file")
 Generate ONLY the complete README.md content (raw Markdown only, no explanations):"
 
   local readme_content
-  # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉可能的思考过程
-  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null | sed '/^```/,/^```/d' | sed '/^Here\|^I\|^The following\|^Based on\|^This README/d'); then
-    # 进一步清理可能的元评论
-    readme_content=$(echo "$readme_content" | sed '/^Let me\|^I will\|^I have\|^Below is\|^Here is/d')
+  # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉所有可能的杂质
+  if readme_content=$(
+    LC_ALL=C.UTF-8 TERM=dumb ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null |
+      # 移除 ANSI 颜色代码和控制字符
+      sed 's/\x1b\[[0-9;]*m//g' |
+      # 移除思考过程相关的行
+      grep -v 'Thinking\.\.\.' |
+      grep -v '\.\.\.done thinking\.' |
+      grep -v '^思考中\.\.\.' |
+      grep -v '^\.\.\.思考完成\.' |
+      # 移除常见的元评论开头
+      grep -v '^Here\|^I\|^The following\|^Based on\|^This README' |
+      grep -v '^Let me\|^I will\|^I have\|^Below is\|^Here is' |
+      # 确保没有日志信息混入
+      grep -v '\[INFO\]\|\[ERROR\]\|\[WARN\]\|\[SUCCESS\]' |
+      # 移除包装的代码块，保留内容
+      sed '/^```markdown$/,/^```$/{/^```markdown$/d; /^```$/d;}' |
+      # 移除末尾孤立的 ``` 行，保留代码块中的
+      awk 'BEGIN{buffer=""} {if($0=="```" && buffer!="" && buffer!~/```/) next; buffer=$0; print}' |
+      # 移除可能的控制字符
+      tr -d '\r'
+  ); then
 
-    if [[ -n "$readme_content" ]]; then
+    # 最终清理：移除开头和结尾的空行
+    readme_content=$(echo "$readme_content" | sed '/^$/d' | awk 'BEGIN{RS=""; ORS="\n\n"} {print}' | sed 's/\n\n$//')
+
+    if [[ -n "$readme_content" && "${#readme_content}" -gt 50 ]]; then
       echo "$readme_content"
     else
-      log_error "生成的英文 README 内容为空"
+      {
+        log_error "生成的英文 README 内容为空或过短"
+      } >&2
       return 1
     fi
   else
-    log_error "生成英文 README 失败"
+    {
+      log_error "生成英文 README 失败"
+    } >&2
     return 1
   fi
 }
@@ -680,7 +711,11 @@ Generate ONLY the complete README.md content (raw Markdown only, no explanations
 # 生成中文 README 内容
 generate_chinese_readme() {
   local analysis_file="$1"
-  log_info "生成中文版 README..."
+
+  # 将日志输出重定向到 stderr
+  {
+    log_info "生成中文版 README..."
+  } >&2
 
   local prompt="你是一个专业的软件文档编写专家。根据以下项目分析，请生成一个完整且结构良好的 README.md 文件。
 
@@ -690,6 +725,8 @@ generate_chinese_readme() {
 - 不要包含任何关于 README 的元评论、解释或思考过程
 - 不要用代码块或其他格式包装内容
 - 只生成可以直接保存的实际 README.md 文件内容
+- 不要包含任何 ANSI 颜色代码或控制字符
+- 不要包含任何思考过程，如"思考中..."或"...思考完成"
 
 README 应该包含：
 1. 项目标题和简要描述
@@ -716,19 +753,44 @@ $(cat "$analysis_file")
 只生成完整的 README.md 内容（纯 Markdown，无解释）："
 
   local readme_content
-  # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉可能的思考过程
-  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null | sed '/^```/,/^```/d' | sed '/^根据\|^我将\|^以下是\|^这个README/d'); then
-    # 进一步清理可能的元评论
-    readme_content=$(echo "$readme_content" | sed '/^让我\|^我会\|^我已经\|^下面是\|^这里是/d')
+  # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉所有可能的杂质
+  if readme_content=$(
+    LC_ALL=C.UTF-8 TERM=dumb ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null |
+      # 移除 ANSI 颜色代码和控制字符
+      sed 's/\x1b\[[0-9;]*m//g' |
+      # 移除思考过程相关的行
+      grep -v 'Thinking\.\.\.' |
+      grep -v '\.\.\.done thinking\.' |
+      grep -v '^思考中\.\.\.' |
+      grep -v '^\.\.\.思考完成\.' |
+      # 移除常见的元评论开头
+      grep -v '^根据\|^我将\|^以下是\|^这个README' |
+      grep -v '^让我\|^我会\|^我已经\|^下面是\|^这里是' |
+      # 确保没有日志信息混入
+      grep -v '\[INFO\]\|\[ERROR\]\|\[WARN\]\|\[SUCCESS\]' |
+      # 移除包装的代码块，保留内容
+      sed '/^```markdown$/,/^```$/{/^```markdown$/d; /^```$/d;}' |
+      # 移除末尾孤立的 ``` 行
+      sed '${/^```$/d;}' |
+      # 移除可能的控制字符
+      tr -d '\r'
+  ); then
 
-    if [[ -n "$readme_content" ]]; then
+    # 最终清理：移除开头和结尾的空行
+    readme_content=$(echo "$readme_content" | sed '/^$/d' | awk 'BEGIN{RS=""; ORS="\n\n"} {print}' | sed 's/\n\n$//')
+
+    if [[ -n "$readme_content" && "${#readme_content}" -gt 50 ]]; then
       echo "$readme_content"
     else
-      log_error "生成的中文 README 内容为空"
+      {
+        log_error "生成的中文 README 内容为空或过短"
+      } >&2
       return 1
     fi
   else
-    log_error "生成中文 README 失败"
+    {
+      log_error "生成中文 README 失败"
+    } >&2
     return 1
   fi
 }
