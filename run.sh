@@ -8,7 +8,7 @@ set -o pipefail
 
 # 变量初始化
 TARGET_DIR=""
-OLLAMA_MODEL="deepseek-r1:8b"
+OLLAMA_MODEL="qwen3:8b"
 OUTPUT_FILE=""
 LANGUAGE="english" # 默认英文在前
 FORCE=false        # 默认不强制重新生成
@@ -65,7 +65,7 @@ show_help() {
   echo ""
   echo "选项:"
   echo "  -h, --help     显示帮助信息"
-  echo "  -m, --model    指定 Ollama 模型 (默认: deepseek-r1:8b)"
+  echo "  -m, --model    指定 Ollama 模型 (默认: qwen3:8b)"
   echo "  -o, --output   指定输出文件路径 (默认: <目标文件夹>/README.md)"
   echo "  -l, --lang     指定默认显示语言 (english/chinese, 默认: english)"
   echo "  -f, --force    强制重新生成，忽略现有 README 文件"
