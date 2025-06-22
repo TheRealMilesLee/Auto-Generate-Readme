@@ -461,10 +461,11 @@ analyze_project() {
   log_info "路径: $dir"
 
   # 创建分析报告（使用安全的临时文件）
-  TEMP_ANALYSIS_FILE=$(create_temp_file "project_analysis" ".txt")
+  local temp_analysis_file
+  temp_analysis_file=$(create_temp_file "project_analysis" ".txt")
 
   # 调试信息：显示临时文件路径
-  log_info "临时分析文件: $TEMP_ANALYSIS_FILE"
+  log_info "临时分析文件: $temp_analysis_file"
 
   # 分别获取各部分内容，避免在 here document 中使用命令替换
   local directory_structure file_types important_files languages
@@ -496,27 +497,30 @@ analyze_project() {
     printf "%s\n\n" "$file_types"
     printf "%s\n\n" "$important_files"
     printf "%s\n\n" "$languages"
-  } >"$TEMP_ANALYSIS_FILE" 2>/dev/null
+  } >"$temp_analysis_file" 2>/dev/null
 
   # 验证文件是否成功创建
-  if [[ ! -f "$TEMP_ANALYSIS_FILE" ]]; then
-    log_error "分析报告文件不存在: $TEMP_ANALYSIS_FILE"
+  if [[ ! -f "$temp_analysis_file" ]]; then
+    log_error "分析报告文件不存在: $temp_analysis_file"
     return 1
   fi
 
-  if [[ ! -s "$TEMP_ANALYSIS_FILE" ]]; then
-    log_error "分析报告文件为空: $TEMP_ANALYSIS_FILE"
+  if [[ ! -s "$temp_analysis_file" ]]; then
+    log_error "分析报告文件为空: $temp_analysis_file"
     # 显示文件权限信息用于调试
-    ls -la "$TEMP_ANALYSIS_FILE" 2>/dev/null || log_error "无法获取文件信息"
+    ls -la "$temp_analysis_file" 2>/dev/null || log_error "无法获取文件信息"
     return 1
   fi
 
   local file_size
-  file_size=$(wc -c <"$TEMP_ANALYSIS_FILE" 2>/dev/null || echo 0)
+  file_size=$(wc -c <"$temp_analysis_file" 2>/dev/null || echo 0)
   log_info "分析报告创建成功，大小: $file_size 字节"
 
+  # 将临时文件路径保存到全局变量，避免被清理
+  TEMP_ANALYSIS_FILE="$temp_analysis_file"
+
   # 返回文件路径时不要包含任何日志输出
-  printf "%s" "$TEMP_ANALYSIS_FILE"
+  printf "%s" "$temp_analysis_file"
 }
 
 # 生成英文 README 内容
@@ -848,10 +852,31 @@ main() {
 
   log_info "项目分析完成，分析文件: $analysis_file"
 
+  # 再次验证文件是否存在（可能有时序问题）
+  sleep 0.1 # 短暂等待确保文件系统同步
+
   if [[ ! -f "$analysis_file" ]]; then
     log_error "项目分析失败：分析文件不存在"
+    # 调试信息：检查 /tmp 目录
+    log_info "检查 /tmp 目录中的临时文件："
+    ls -la /tmp/project_analysis_* 2>/dev/null || log_info "未找到项目分析临时文件"
     exit 1
   fi
+
+  # 验证文件可读性和内容
+  if [[ ! -r "$analysis_file" ]]; then
+    log_error "分析文件无法读取: $analysis_file"
+    exit 1
+  fi
+
+  if [[ ! -s "$analysis_file" ]]; then
+    log_error "分析文件为空: $analysis_file"
+    exit 1
+  fi
+
+  local file_size
+  file_size=$(wc -c <"$analysis_file" 2>/dev/null || echo 0)
+  log_info "分析文件验证通过，大小: $file_size 字节"
 
   # 生成 README
   if ! generate_readme "$analysis_file"; then
