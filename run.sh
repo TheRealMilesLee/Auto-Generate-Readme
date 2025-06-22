@@ -74,6 +74,38 @@ cleanup() {
 trap 'handle_error $LINENO' ERR
 trap 'cleanup' EXIT
 
+# 创建安全的临时文件
+create_temp_file() {
+  local prefix="${1:-temp}"
+  local suffix="${2:-}"
+
+  # 确定临时目录
+  local temp_dir
+  if [[ -n "${TEMP:-}" && -d "$TEMP" ]]; then
+    temp_dir="$TEMP"
+  elif [[ -n "${TMP:-}" && -d "$TMP" ]]; then
+    temp_dir="$TMP"
+  elif [[ -d "/tmp" ]]; then
+    temp_dir="/tmp"
+  else
+    temp_dir="."
+  fi
+
+  # 创建临时文件
+  if command -v mktemp >/dev/null 2>&1; then
+    if [[ -n "$suffix" ]]; then
+      mktemp "${temp_dir}/${prefix}_XXXXXX${suffix}"
+    else
+      mktemp "${temp_dir}/${prefix}_XXXXXX"
+    fi
+  else
+    # 备用方案：手动创建临时文件
+    local temp_file="${temp_dir}/${prefix}_$$_$(date +%s)${suffix}"
+    touch "$temp_file"
+    echo "$temp_file"
+  fi
+}
+
 # 帮助信息
 show_help() {
   echo -e "${BLUE}Auto-Generate-Readme Tool${NC}"
@@ -257,7 +289,7 @@ get_file_types() {
 
   # 使用更安全的方式处理文件名
   local temp_list
-  temp_list=$(mktemp)
+  temp_list=$(create_temp_file "file_list")
 
   find "$dir" -type f \( -name ".*" -prune \) -o -type f -print0 |
     while IFS= read -r -d '' file; do
@@ -369,7 +401,7 @@ get_important_files() {
   # 查找其他可能的入口文件
   echo "  其他可能的入口文件:"
   local temp_files
-  temp_files=$(mktemp)
+  temp_files=$(create_temp_file "entry_files")
 
   find "$dir" -maxdepth 2 -type f \( \
     -name "*.py" -o -name "*.js" -o -name "*.ts" -o \
@@ -394,7 +426,7 @@ analyze_languages() {
   echo "主要编程语言:"
 
   local temp_files
-  temp_files=$(mktemp)
+  temp_files=$(create_temp_file "lang_files")
 
   find "$dir" -type f -name ".*" -prune -o -type f -print 2>/dev/null |
     grep -E '\.(py|js|ts|java|cpp|c|go|php|rb|rs|swift|kt|scala|sh|ps1|m|mm|h)$' >"$temp_files"
@@ -445,7 +477,7 @@ analyze_project() {
   log_info "路径: $dir"
 
   # 创建分析报告（使用安全的临时文件）
-  TEMP_ANALYSIS_FILE=$(mktemp /tmp/project_analysis_XXXXXX.txt)
+  TEMP_ANALYSIS_FILE=$(create_temp_file "project_analysis" ".txt")
 
   # 分别获取各部分内容，避免在 here document 中使用命令替换
   local directory_structure file_types important_files languages
@@ -467,7 +499,7 @@ analyze_project() {
     printf "%s\n\n" "$file_types"
     printf "%s\n\n" "$important_files"
     printf "%s\n\n" "$languages"
-  } >"$TEMP_ANALYSIS_FILE"
+  } >"$TEMP_ANALYSIS_FILE" 2>/dev/null
 
   # 验证文件是否成功创建
   if [[ ! -f "$TEMP_ANALYSIS_FILE" || ! -s "$TEMP_ANALYSIS_FILE" ]]; then
@@ -475,7 +507,8 @@ analyze_project() {
     return 1
   fi
 
-  echo "$TEMP_ANALYSIS_FILE"
+  # 返回文件路径时不要包含任何日志输出
+  printf "%s" "$TEMP_ANALYSIS_FILE"
 }
 
 # 生成英文 README 内容
@@ -485,10 +518,12 @@ generate_english_readme() {
 
   local prompt="You are a professional software documentation writer. Based on the following project analysis, please generate a comprehensive and well-structured README.md file.
 
-IMPORTANT:
-- Output ONLY the Markdown content, no explanations, no thinking process, no additional text
+CRITICAL REQUIREMENTS:
+- Output ONLY raw Markdown content, no explanations, no thinking process, no additional text
 - Start directly with the markdown content (e.g., # Project Title)
-- Do not include any meta-commentary or explanations about the README
+- Do not include any meta-commentary, explanations, or thinking process about the README
+- Do not wrap the content in code blocks or any other formatting
+- Generate ONLY the actual README.md file content that can be directly saved
 
 The README should include:
 1. Project title and brief description
@@ -512,11 +547,14 @@ Use proper Markdown formatting. Make the README informative, professional, and e
 Project Analysis:
 $(cat "$analysis_file")
 
-Generate the complete README.md content (Markdown only):"
+Generate ONLY the complete README.md content (raw Markdown only, no explanations):"
 
   local readme_content
-  # 确保 Ollama 输出使用 UTF-8 编码
-  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null); then
+  # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉可能的思考过程
+  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null | sed '/^```/,/^```/d' | sed '/^Here\|^I\|^The following\|^Based on\|^This README/d'); then
+    # 进一步清理可能的元评论
+    readme_content=$(echo "$readme_content" | sed '/^Let me\|^I will\|^I have\|^Below is\|^Here is/d')
+
     if [[ -n "$readme_content" ]]; then
       echo "$readme_content"
     else
@@ -536,10 +574,12 @@ generate_chinese_readme() {
 
   local prompt="你是一个专业的软件文档编写专家。根据以下项目分析，请生成一个完整且结构良好的 README.md 文件。
 
-重要说明：
-- 只输出 Markdown 内容，不要任何解释、思考过程或额外文字
+关键要求：
+- 只输出纯 Markdown 内容，不要任何解释、思考过程或额外文字
 - 直接以 markdown 内容开始（例如：# 项目标题）
-- 不要包含任何关于 README 的元评论或说明
+- 不要包含任何关于 README 的元评论、解释或思考过程
+- 不要用代码块或其他格式包装内容
+- 只生成可以直接保存的实际 README.md 文件内容
 
 README 应该包含：
 1. 项目标题和简要描述
@@ -563,11 +603,14 @@ README 应该包含：
 项目分析：
 $(cat "$analysis_file")
 
-生成完整的 README.md 内容（仅 Markdown）："
+只生成完整的 README.md 内容（纯 Markdown，无解释）："
 
   local readme_content
-  # 确保 Ollama 输出使用 UTF-8 编码
-  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null); then
+  # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉可能的思考过程
+  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null | sed '/^```/,/^```/d' | sed '/^根据\|^我将\|^以下是\|^这个README/d'); then
+    # 进一步清理可能的元评论
+    readme_content=$(echo "$readme_content" | sed '/^让我\|^我会\|^我已经\|^下面是\|^这里是/d')
+
     if [[ -n "$readme_content" ]]; then
       echo "$readme_content"
     else
@@ -654,7 +697,7 @@ write_readme_file() {
 
   # 创建临时文件以确保原子写入
   local temp_file
-  temp_file=$(mktemp "${output_file}.tmp.XXXXXX")
+  temp_file=$(create_temp_file "$(basename "$output_file")" ".tmp")
 
   # 使用 printf 而不是 echo 来避免换行问题
   # 设置 LC_ALL=C.UTF-8 确保 UTF-8 编码
@@ -787,7 +830,8 @@ main() {
 
   # 分析项目
   local analysis_file
-  if ! analysis_file=$(analyze_project "$TARGET_DIR"); then
+  analysis_file=$(analyze_project "$TARGET_DIR")
+  if [[ ! -f "$analysis_file" ]]; then
     log_error "项目分析失败"
     exit 1
   fi
