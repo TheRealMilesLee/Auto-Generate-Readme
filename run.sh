@@ -52,21 +52,30 @@ handle_error() {
 
 # 清理函数
 cleanup() {
-  # 清理分析报告临时文件
-  if [[ -n "${TEMP_ANALYSIS_FILE:-}" && -f "$TEMP_ANALYSIS_FILE" ]]; then
-    rm -f "$TEMP_ANALYSIS_FILE"
-  fi
+  # 只在脚本完全结束时清理临时文件
+  if [[ "${CLEANUP_ENABLED:-true}" == "true" ]]; then
+    # 清理分析报告临时文件
+    if [[ -n "${TEMP_ANALYSIS_FILE:-}" && -f "$TEMP_ANALYSIS_FILE" ]]; then
+      rm -f "$TEMP_ANALYSIS_FILE"
+    fi
 
-  # 清理其他可能的临时文件
-  if [[ -n "${TEMP_FILES:-}" ]]; then
-    for temp_file in "${TEMP_FILES[@]}"; do
-      [[ -f "$temp_file" ]] && rm -f "$temp_file"
-    done
-  fi
+    # 清理其他可能的临时文件
+    if [[ -n "${TEMP_FILES:-}" ]]; then
+      for temp_file in "${TEMP_FILES[@]}"; do
+        [[ -f "$temp_file" ]] && rm -f "$temp_file"
+      done
+    fi
 
-  # 清理写入过程中的临时文件
-  if [[ -n "${OUTPUT_FILE:-}" ]]; then
-    rm -f "${OUTPUT_FILE}".tmp.*
+    # 清理写入过程中的临时文件
+    if [[ -n "${OUTPUT_FILE:-}" ]]; then
+      rm -f "${OUTPUT_FILE}".tmp.*
+    fi
+
+    # 清理所有项目分析临时文件
+    rm -f /tmp/project_analysis_* 2>/dev/null || true
+    rm -f /tmp/file_list_* 2>/dev/null || true
+    rm -f /tmp/entry_files_* 2>/dev/null || true
+    rm -f /tmp/lang_files_* 2>/dev/null || true
   fi
 }
 
@@ -275,27 +284,45 @@ get_file_types() {
   local temp_list
   temp_list=$(create_temp_file "file_list")
 
-  find "$dir" -type f \( -name ".*" -prune \) -o -type f -print0 |
-    while IFS= read -r -d '' file; do
-      basename "$file"
-    done >"$temp_list"
-
-  if [[ -s "$temp_list" ]]; then
-    sed 's/.*\.//' "$temp_list" |
-      sort | uniq -c | sort -nr |
-      head -20 |
-      while read -r count ext; do
-        if [[ -n "$ext" && "$ext" != "$(basename "$file")" ]]; then
-          echo "  .$ext: $count 个文件"
-        else
-          echo "  无扩展名: $count 个文件"
-        fi
-      done
-  else
-    echo "  未找到文件"
+  # 确保临时文件创建成功
+  if [[ ! -f "$temp_list" ]]; then
+    echo "  - 无法创建临时文件进行统计"
+    return 1
   fi
 
-  rm -f "$temp_list"
+  # 使用更安全的 find 命令，避免特殊字符问题
+  if find "$dir" -type f \( -name ".*" -prune \) -o -type f -print0 2>/dev/null |
+    while IFS= read -r -d '' file; do
+      if [[ -f "$file" ]]; then
+        basename "$file" 2>/dev/null || echo "unknown"
+      fi
+    done >"$temp_list"; then
+
+    if [[ -s "$temp_list" ]]; then
+      # 使用更安全的处理方式
+      if sed 's/.*\.//' "$temp_list" 2>/dev/null |
+        sort | uniq -c | sort -nr |
+        head -20 |
+        while read -r count ext; do
+          if [[ -n "$ext" && "$ext" != "unknown" ]]; then
+            echo "  .$ext: $count 个文件"
+          else
+            echo "  无扩展名: $count 个文件"
+          fi
+        done; then
+        true # 成功处理
+      else
+        echo "  - 处理文件扩展名时出错"
+      fi
+    else
+      echo "  - 未找到文件"
+    fi
+  else
+    echo "  - 查找文件时出错"
+  fi
+
+  # 安全删除临时文件
+  rm -f "$temp_list" 2>/dev/null || true
 }
 
 # 获取目录结构
@@ -359,7 +386,7 @@ get_important_files() {
   # 检查 Xcode 项目文件
   local xcode_projects=0
   for xcodeproj in "$dir"/*.xcodeproj; do
-    if [[ -d "$xcodeproj" ]]; then
+    if [[ -d "$xcodeproj" && "$xcodeproj" != "$dir/*.xcodeproj" ]]; then
       echo "  - $(basename "$xcodeproj")"
       ((found_files++))
       ((xcode_projects++))
@@ -367,7 +394,7 @@ get_important_files() {
   done
 
   for xcworkspace in "$dir"/*.xcworkspace; do
-    if [[ -d "$xcworkspace" ]]; then
+    if [[ -d "$xcworkspace" && "$xcworkspace" != "$dir/*.xcworkspace" ]]; then
       echo "  - $(basename "$xcworkspace")"
       ((found_files++))
       ((xcode_projects++))
@@ -387,21 +414,31 @@ get_important_files() {
   local temp_files
   temp_files=$(create_temp_file "entry_files")
 
-  find "$dir" -maxdepth 2 -type f \( \
-    -name "*.py" -o -name "*.js" -o -name "*.ts" -o \
-    -name "*.go" -o -name "*.java" -o -name "*.cpp" -o -name "*.c" -o \
-    -name "*.swift" -o -name "*.m" -o -name "*.mm" \
-    \) 2>/dev/null | head -10 >"$temp_files"
+  if [[ -f "$temp_files" ]]; then
+    if find "$dir" -maxdepth 2 -type f \( \
+      -name "*.py" -o -name "*.js" -o -name "*.ts" -o \
+      -name "*.go" -o -name "*.java" -o -name "*.cpp" -o -name "*.c" -o \
+      -name "*.swift" -o -name "*.m" -o -name "*.mm" \
+      \) 2>/dev/null | head -10 >"$temp_files"; then
 
-  if [[ -s "$temp_files" ]]; then
-    while IFS= read -r file; do
-      echo "    - $(basename "$file")"
-    done <"$temp_files"
+      if [[ -s "$temp_files" ]]; then
+        while IFS= read -r file; do
+          if [[ -n "$file" ]]; then
+            echo "    - $(basename "$file")"
+          fi
+        done <"$temp_files"
+      else
+        echo "    - 未找到明显的入口文件"
+      fi
+    else
+      echo "    - 查找入口文件时出错"
+    fi
+
+    # 安全删除临时文件
+    rm -f "$temp_files" 2>/dev/null || true
   else
-    echo "    - 未找到明显的入口文件"
+    echo "    - 无法创建临时文件"
   fi
-
-  rm -f "$temp_files"
 }
 
 # 分析代码语言
@@ -412,43 +449,57 @@ analyze_languages() {
   local temp_files
   temp_files=$(create_temp_file "lang_files")
 
-  find "$dir" -type f -name ".*" -prune -o -type f -print 2>/dev/null |
-    grep -E '\.(py|js|ts|java|cpp|c|go|php|rb|rs|swift|kt|scala|sh|ps1|m|mm|h)$' >"$temp_files"
+  # 确保临时文件创建成功
+  if [[ ! -f "$temp_files" ]]; then
+    echo "  - 无法创建临时文件进行语言分析"
+    return 1
+  fi
 
-  if [[ -s "$temp_files" ]]; then
-    sed 's/.*\.//' "$temp_files" |
-      sort | uniq -c | sort -nr |
-      head -5 |
-      while read -r count ext; do
-        local lang
-        case $ext in
-        py) lang="Python" ;;
-        js) lang="JavaScript" ;;
-        ts) lang="TypeScript" ;;
-        java) lang="Java" ;;
-        cpp | cc | cxx) lang="C++" ;;
-        c) lang="C" ;;
-        go) lang="Go" ;;
-        php) lang="PHP" ;;
-        rb) lang="Ruby" ;;
-        rs) lang="Rust" ;;
-        swift) lang="Swift" ;;
-        kt) lang="Kotlin" ;;
-        scala) lang="Scala" ;;
-        sh) lang="Shell Script" ;;
-        ps1) lang="PowerShell" ;;
-        m) lang="Objective-C" ;;
-        mm) lang="Objective-C++" ;;
-        h) lang="C/C++/Objective-C Header" ;;
-        *) lang="$ext" ;;
-        esac
-        echo "  - $lang: $count 个文件"
-      done
+  if find "$dir" -type f -name ".*" -prune -o -type f -print 2>/dev/null |
+    grep -E '\.(py|js|ts|java|cpp|c|go|php|rb|rs|swift|kt|scala|sh|ps1|m|mm|h)$' >"$temp_files"; then
+
+    if [[ -s "$temp_files" ]]; then
+      if sed 's/.*\.//' "$temp_files" 2>/dev/null |
+        sort | uniq -c | sort -nr |
+        head -5 |
+        while read -r count ext; do
+          local lang
+          case $ext in
+          py) lang="Python" ;;
+          js) lang="JavaScript" ;;
+          ts) lang="TypeScript" ;;
+          java) lang="Java" ;;
+          cpp | cc | cxx) lang="C++" ;;
+          c) lang="C" ;;
+          go) lang="Go" ;;
+          php) lang="PHP" ;;
+          rb) lang="Ruby" ;;
+          rs) lang="Rust" ;;
+          swift) lang="Swift" ;;
+          kt) lang="Kotlin" ;;
+          scala) lang="Scala" ;;
+          sh) lang="Shell Script" ;;
+          ps1) lang="PowerShell" ;;
+          m) lang="Objective-C" ;;
+          mm) lang="Objective-C++" ;;
+          h) lang="C/C++/Objective-C Header" ;;
+          *) lang="$ext" ;;
+          esac
+          echo "  - $lang: $count 个文件"
+        done; then
+        true # 成功处理
+      else
+        echo "  - 处理语言统计时出错"
+      fi
+    else
+      echo "  - 未检测到编程语言文件"
+    fi
   else
     echo "  - 未检测到编程语言文件"
   fi
 
-  rm -f "$temp_files"
+  # 安全删除临时文件
+  rm -f "$temp_files" 2>/dev/null || true
 }
 
 # 分析项目信息
@@ -457,37 +508,64 @@ analyze_project() {
   local project_name
   project_name=$(basename "$dir")
 
-  log_info "分析项目: $project_name"
-  log_info "路径: $dir"
+  # 将日志输出重定向到 stderr，确保只有文件路径输出到 stdout
+  {
+    log_info "分析项目: $project_name"
+    log_info "路径: $dir"
+  } >&2
+
+  # 临时禁用自动清理，防止文件被过早删除
+  CLEANUP_ENABLED=false
 
   # 创建分析报告（使用安全的临时文件）
   local temp_analysis_file
   temp_analysis_file=$(create_temp_file "project_analysis" ".txt")
 
   # 调试信息：显示临时文件路径
-  log_info "临时分析文件: $temp_analysis_file"
+  {
+    log_info "临时分析文件: $temp_analysis_file"
+  } >&2
 
-  # 分别获取各部分内容，避免在 here document 中使用命令替换
+  # 确保临时文件创建成功
+  if [[ ! -f "$temp_analysis_file" ]]; then
+    {
+      log_error "无法创建临时分析文件: $temp_analysis_file"
+    } >&2
+    return 1
+  fi
+
+  # 分别获取各部分内容，使用更安全的方式
   local directory_structure file_types important_files languages
 
-  log_info "开始收集项目信息..."
+  {
+    log_info "开始收集项目信息..."
 
-  # 重定向 stderr 以避免日志输出干扰
-  log_info "获取目录结构..."
+    # 重定向 stderr 以避免日志输出干扰，并处理可能的错误
+    log_info "获取目录结构..."
+  } >&2
   directory_structure=$(get_directory_structure "$dir" 2>/dev/null || echo "  - 无法获取目录结构")
 
-  log_info "获取文件类型统计..."
+  {
+    log_info "获取文件类型统计..."
+  } >&2
   file_types=$(get_file_types "$dir" 2>/dev/null || echo "  - 无法获取文件类型")
 
-  log_info "获取重要文件..."
+  {
+    log_info "获取重要文件..."
+  } >&2
   important_files=$(get_important_files "$dir" 2>/dev/null || echo "  - 无法获取重要文件")
 
-  log_info "分析编程语言..."
+  {
+    log_info "分析编程语言..."
+  } >&2
   languages=$(analyze_languages "$dir" 2>/dev/null || echo "  - 无法分析编程语言")
 
-  log_info "写入分析报告..."
-  # 使用 printf 而不是 here document 来避免特殊字符问题
   {
+    log_info "写入分析报告..."
+  } >&2
+
+  # 使用更安全的写入方式
+  if ! {
     printf "项目分析报告\n"
     printf "=============\n\n"
     printf "项目名称: %s\n" "$project_name"
@@ -497,29 +575,49 @@ analyze_project() {
     printf "%s\n\n" "$file_types"
     printf "%s\n\n" "$important_files"
     printf "%s\n\n" "$languages"
-  } >"$temp_analysis_file" 2>/dev/null
+  } >"$temp_analysis_file" 2>/dev/null; then
+    {
+      log_error "写入分析报告失败"
+    } >&2
+    rm -f "$temp_analysis_file" 2>/dev/null || true
+    return 1
+  fi
 
-  # 验证文件是否成功创建
+  # 验证文件是否成功创建和写入
   if [[ ! -f "$temp_analysis_file" ]]; then
-    log_error "分析报告文件不存在: $temp_analysis_file"
+    {
+      log_error "分析报告文件创建失败: $temp_analysis_file"
+    } >&2
     return 1
   fi
 
   if [[ ! -s "$temp_analysis_file" ]]; then
-    log_error "分析报告文件为空: $temp_analysis_file"
-    # 显示文件权限信息用于调试
-    ls -la "$temp_analysis_file" 2>/dev/null || log_error "无法获取文件信息"
+    {
+      log_error "分析报告文件为空: $temp_analysis_file"
+      # 显示文件权限和状态信息用于调试
+      if ls -la "$temp_analysis_file" 2>/dev/null; then
+        log_info "文件权限信息已显示"
+      else
+        log_error "无法获取文件权限信息"
+      fi
+    } >&2
+    rm -f "$temp_analysis_file" 2>/dev/null || true
     return 1
   fi
 
   local file_size
   file_size=$(wc -c <"$temp_analysis_file" 2>/dev/null || echo 0)
-  log_info "分析报告创建成功，大小: $file_size 字节"
+  {
+    log_info "分析报告创建成功，大小: $file_size 字节"
+  } >&2
 
-  # 将临时文件路径保存到全局变量，避免被清理
+  # 将临时文件路径保存到全局变量，确保在主函数中可以访问
   TEMP_ANALYSIS_FILE="$temp_analysis_file"
 
-  # 返回文件路径时不要包含任何日志输出
+  # 重新启用清理（但不会立即清理当前正在使用的文件）
+  CLEANUP_ENABLED=true
+
+  # 返回文件路径（仅文件路径，不包含日志输出）
   printf "%s" "$temp_analysis_file"
 }
 
@@ -843,20 +941,23 @@ main() {
   # 分析项目
   local analysis_file
   log_info "开始项目分析..."
-  analysis_file=$(analyze_project "$TARGET_DIR")
 
-  if [[ -z "$analysis_file" ]]; then
-    log_error "项目分析返回空路径"
+  # 临时禁用 set -e 以防止子函数中的正常错误处理被中断
+  set +e
+  analysis_file=$(analyze_project "$TARGET_DIR")
+  local analyze_result=$?
+  set -e
+
+  if [[ $analyze_result -ne 0 || -z "$analysis_file" ]]; then
+    log_error "项目分析失败，返回码: $analyze_result"
     exit 1
   fi
 
   log_info "项目分析完成，分析文件: $analysis_file"
 
-  # 再次验证文件是否存在（可能有时序问题）
-  sleep 0.1 # 短暂等待确保文件系统同步
-
+  # 验证分析文件的存在性和完整性
   if [[ ! -f "$analysis_file" ]]; then
-    log_error "项目分析失败：分析文件不存在"
+    log_error "项目分析失败：分析文件不存在: $analysis_file"
     # 调试信息：检查 /tmp 目录
     log_info "检查 /tmp 目录中的临时文件："
     ls -la /tmp/project_analysis_* 2>/dev/null || log_info "未找到项目分析临时文件"
