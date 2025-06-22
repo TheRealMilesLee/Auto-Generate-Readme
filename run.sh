@@ -79,30 +79,14 @@ create_temp_file() {
   local prefix="${1:-temp}"
   local suffix="${2:-}"
 
-  # 确定临时目录
-  local temp_dir
-  if [[ -n "${TEMP:-}" && -d "$TEMP" ]]; then
-    temp_dir="$TEMP"
-  elif [[ -n "${TMP:-}" && -d "$TMP" ]]; then
-    temp_dir="$TMP"
-  elif [[ -d "/tmp" ]]; then
-    temp_dir="/tmp"
-  else
-    temp_dir="."
-  fi
+  # 在 WSL2 Ubuntu 环境下，优先使用 /tmp 目录
+  local temp_dir="/tmp"
 
   # 创建临时文件
-  if command -v mktemp >/dev/null 2>&1; then
-    if [[ -n "$suffix" ]]; then
-      mktemp "${temp_dir}/${prefix}_XXXXXX${suffix}"
-    else
-      mktemp "${temp_dir}/${prefix}_XXXXXX"
-    fi
+  if [[ -n "$suffix" ]]; then
+    mktemp "${temp_dir}/${prefix}_XXXXXX${suffix}"
   else
-    # 备用方案：手动创建临时文件
-    local temp_file="${temp_dir}/${prefix}_$$_$(date +%s)${suffix}"
-    touch "$temp_file"
-    echo "$temp_file"
+    mktemp "${temp_dir}/${prefix}_XXXXXX"
   fi
 }
 
@@ -479,15 +463,28 @@ analyze_project() {
   # 创建分析报告（使用安全的临时文件）
   TEMP_ANALYSIS_FILE=$(create_temp_file "project_analysis" ".txt")
 
+  # 调试信息：显示临时文件路径
+  log_info "临时分析文件: $TEMP_ANALYSIS_FILE"
+
   # 分别获取各部分内容，避免在 here document 中使用命令替换
   local directory_structure file_types important_files languages
 
+  log_info "开始收集项目信息..."
+
   # 重定向 stderr 以避免日志输出干扰
+  log_info "获取目录结构..."
   directory_structure=$(get_directory_structure "$dir" 2>/dev/null || echo "  - 无法获取目录结构")
+
+  log_info "获取文件类型统计..."
   file_types=$(get_file_types "$dir" 2>/dev/null || echo "  - 无法获取文件类型")
+
+  log_info "获取重要文件..."
   important_files=$(get_important_files "$dir" 2>/dev/null || echo "  - 无法获取重要文件")
+
+  log_info "分析编程语言..."
   languages=$(analyze_languages "$dir" 2>/dev/null || echo "  - 无法分析编程语言")
 
+  log_info "写入分析报告..."
   # 使用 printf 而不是 here document 来避免特殊字符问题
   {
     printf "项目分析报告\n"
@@ -502,10 +499,21 @@ analyze_project() {
   } >"$TEMP_ANALYSIS_FILE" 2>/dev/null
 
   # 验证文件是否成功创建
-  if [[ ! -f "$TEMP_ANALYSIS_FILE" || ! -s "$TEMP_ANALYSIS_FILE" ]]; then
-    log_error "创建分析报告失败"
+  if [[ ! -f "$TEMP_ANALYSIS_FILE" ]]; then
+    log_error "分析报告文件不存在: $TEMP_ANALYSIS_FILE"
     return 1
   fi
+
+  if [[ ! -s "$TEMP_ANALYSIS_FILE" ]]; then
+    log_error "分析报告文件为空: $TEMP_ANALYSIS_FILE"
+    # 显示文件权限信息用于调试
+    ls -la "$TEMP_ANALYSIS_FILE" 2>/dev/null || log_error "无法获取文件信息"
+    return 1
+  fi
+
+  local file_size
+  file_size=$(wc -c <"$TEMP_ANALYSIS_FILE" 2>/dev/null || echo 0)
+  log_info "分析报告创建成功，大小: $file_size 字节"
 
   # 返回文件路径时不要包含任何日志输出
   printf "%s" "$TEMP_ANALYSIS_FILE"
@@ -830,9 +838,18 @@ main() {
 
   # 分析项目
   local analysis_file
+  log_info "开始项目分析..."
   analysis_file=$(analyze_project "$TARGET_DIR")
+
+  if [[ -z "$analysis_file" ]]; then
+    log_error "项目分析返回空路径"
+    exit 1
+  fi
+
+  log_info "项目分析完成，分析文件: $analysis_file"
+
   if [[ ! -f "$analysis_file" ]]; then
-    log_error "项目分析失败"
+    log_error "项目分析失败：分析文件不存在"
     exit 1
   fi
 
