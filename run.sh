@@ -6,6 +6,10 @@
 set -e
 set -o pipefail
 
+# 设置 UTF-8 编码环境
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
+
 # 变量初始化
 TARGET_DIR=""
 OLLAMA_MODEL="qwen3:8b"
@@ -309,6 +313,8 @@ get_important_files() {
     "Makefile" "CMakeLists.txt" "build.gradle" "pom.xml"
     "tsconfig.json" "webpack.config.js" "vite.config.js"
     "go.mod" "Cargo.toml" "composer.json"
+    "Podfile" "Podfile.lock" "Package.swift" "Cartfile" "Cartfile.resolved"
+    "Info.plist" "AppDelegate.swift" "SceneDelegate.swift"
     ".gitignore" "LICENSE" "CHANGELOG.md"
     "main.py" "app.py" "index.js" "main.js" "index.html"
   )
@@ -321,6 +327,28 @@ get_important_files() {
     fi
   done
 
+  # 检查 Xcode 项目文件
+  local xcode_projects=0
+  for xcodeproj in "$dir"/*.xcodeproj; do
+    if [[ -d "$xcodeproj" ]]; then
+      echo "  - $(basename "$xcodeproj")"
+      ((found_files++))
+      ((xcode_projects++))
+    fi
+  done
+
+  for xcworkspace in "$dir"/*.xcworkspace; do
+    if [[ -d "$xcworkspace" ]]; then
+      echo "  - $(basename "$xcworkspace")"
+      ((found_files++))
+      ((xcode_projects++))
+    fi
+  done
+
+  if [[ $xcode_projects -gt 0 ]]; then
+    echo "  iOS/macOS 项目类型: Xcode 项目"
+  fi
+
   if [[ $found_files -eq 0 ]]; then
     echo "  - 未找到标准配置文件"
   fi
@@ -332,7 +360,8 @@ get_important_files() {
 
   find "$dir" -maxdepth 2 -type f \( \
     -name "*.py" -o -name "*.js" -o -name "*.ts" -o \
-    -name "*.go" -o -name "*.java" -o -name "*.cpp" -o -name "*.c" \
+    -name "*.go" -o -name "*.java" -o -name "*.cpp" -o -name "*.c" -o \
+    -name "*.swift" -o -name "*.m" -o -name "*.mm" \
     \) 2>/dev/null | head -10 >"$temp_files"
 
   if [[ -s "$temp_files" ]]; then
@@ -355,7 +384,7 @@ analyze_languages() {
   temp_files=$(mktemp)
 
   find "$dir" -type f -name ".*" -prune -o -type f -print 2>/dev/null |
-    grep -E '\.(py|js|ts|java|cpp|c|go|php|rb|rs|swift|kt|scala|sh|ps1)$' >"$temp_files"
+    grep -E '\.(py|js|ts|java|cpp|c|go|php|rb|rs|swift|kt|scala|sh|ps1|m|mm|h)$' >"$temp_files"
 
   if [[ -s "$temp_files" ]]; then
     sed 's/.*\.//' "$temp_files" |
@@ -379,6 +408,9 @@ analyze_languages() {
         scala) lang="Scala" ;;
         sh) lang="Shell Script" ;;
         ps1) lang="PowerShell" ;;
+        m) lang="Objective-C" ;;
+        mm) lang="Objective-C++" ;;
+        h) lang="C/C++/Objective-C Header" ;;
         *) lang="$ext" ;;
         esac
         echo "  - $lang: $count 个文件"
@@ -428,26 +460,40 @@ generate_english_readme() {
   local analysis_file="$1"
   log_info "生成英文版 README..."
 
-  local prompt="You are a professional software documentation writer. Based on the following project analysis, please generate a comprehensive and well-structured README.md file. The README should include:
+  local prompt="You are a professional software documentation writer. Based on the following project analysis, please generate a comprehensive and well-structured README.md file.
 
+IMPORTANT:
+- Output ONLY the Markdown content, no explanations, no thinking process, no additional text
+- Start directly with the markdown content (e.g., # Project Title)
+- Do not include any meta-commentary or explanations about the README
+
+The README should include:
 1. Project title and brief description
 2. Features and functionality
-3. Installation instructions
+3. Installation instructions (including Xcode setup for iOS/macOS projects)
 4. Usage examples
 5. Project structure explanation
-6. Dependencies and requirements
+6. Dependencies and requirements (including CocoaPods, SPM, Carthage for iOS/macOS)
 7. Contributing guidelines
 8. License information
 
-Please write in English and use proper Markdown formatting. Make the README informative, professional, and easy to understand.
+For Xcode projects, please include:
+- iOS/macOS deployment targets
+- Xcode version requirements
+- Swift version compatibility
+- CocoaPods/Swift Package Manager setup instructions
+- Build and run instructions
+
+Use proper Markdown formatting. Make the README informative, professional, and easy to understand.
 
 Project Analysis:
 $(cat "$analysis_file")
 
-Please generate a complete README.md content:"
+Generate the complete README.md content (Markdown only):"
 
   local readme_content
-  if readme_content=$(ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null); then
+  # 确保 Ollama 输出使用 UTF-8 编码
+  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null); then
     if [[ -n "$readme_content" ]]; then
       echo "$readme_content"
     else
@@ -465,26 +511,40 @@ generate_chinese_readme() {
   local analysis_file="$1"
   log_info "生成中文版 README..."
 
-  local prompt="你是一个专业的软件文档编写专家。根据以下项目分析，请生成一个完整且结构良好的 README.md 文件。README 应该包含：
+  local prompt="你是一个专业的软件文档编写专家。根据以下项目分析，请生成一个完整且结构良好的 README.md 文件。
 
+重要说明：
+- 只输出 Markdown 内容，不要任何解释、思考过程或额外文字
+- 直接以 markdown 内容开始（例如：# 项目标题）
+- 不要包含任何关于 README 的元评论或说明
+
+README 应该包含：
 1. 项目标题和简要描述
 2. 功能特性
-3. 安装说明
+3. 安装说明（包括 iOS/macOS 项目的 Xcode 设置）
 4. 使用示例
 5. 项目结构说明
-6. 依赖要求
+6. 依赖要求（包括 iOS/macOS 项目的 CocoaPods、SPM、Carthage）
 7. 贡献指南
 8. 许可证信息
 
-请使用中文编写，采用标准的 Markdown 格式。让 README 内容丰富、专业且易于理解。
+对于 Xcode 项目，请包含：
+- iOS/macOS 部署目标
+- Xcode 版本要求
+- Swift 版本兼容性
+- CocoaPods/Swift Package Manager 设置说明
+- 构建和运行说明
+
+使用标准的 Markdown 格式。让 README 内容丰富、专业且易于理解。
 
 项目分析：
 $(cat "$analysis_file")
 
-请生成完整的 README.md 内容："
+生成完整的 README.md 内容（仅 Markdown）："
 
   local readme_content
-  if readme_content=$(ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null); then
+  # 确保 Ollama 输出使用 UTF-8 编码
+  if readme_content=$(LC_ALL=C.UTF-8 ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null); then
     if [[ -n "$readme_content" ]]; then
       echo "$readme_content"
     else
@@ -564,6 +624,57 @@ check_existing_readme() {
   return 1 # 需要生成
 }
 
+# 安全写入文件（确保 UTF-8 编码）
+write_readme_file() {
+  local content="$1"
+  local output_file="$2"
+
+  # 创建临时文件以确保原子写入
+  local temp_file
+  temp_file=$(mktemp "${output_file}.tmp.XXXXXX")
+
+  # 使用 printf 而不是 echo 来避免换行问题
+  # 设置 LC_ALL=C.UTF-8 确保 UTF-8 编码
+  if ! LC_ALL=C.UTF-8 printf '%s\n' "$content" >"$temp_file"; then
+    log_error "写入临时文件失败: $temp_file"
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  # 验证临时文件是否成功写入且非空
+  if [[ ! -f "$temp_file" || ! -s "$temp_file" ]]; then
+    log_error "临时文件为空或不存在: $temp_file"
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  # 原子移动到目标文件
+  if ! mv "$temp_file" "$output_file"; then
+    log_error "移动文件失败: $temp_file -> $output_file"
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  # 验证最终文件
+  if [[ ! -f "$output_file" || ! -s "$output_file" ]]; then
+    log_error "最终文件验证失败: $output_file"
+    return 1
+  fi
+
+  # 检查文件编码（如果 file 命令可用）
+  if command -v file >/dev/null 2>&1; then
+    local file_type
+    file_type=$(file "$output_file")
+    if [[ "$file_type" == *"UTF-8"* ]]; then
+      log_info "文件编码验证成功: UTF-8"
+    else
+      log_warn "文件编码可能不是 UTF-8: $file_type"
+    fi
+  fi
+
+  log_info "文件已成功写入: $output_file ($(wc -c <"$output_file") 字节)"
+}
+
 # 生成双语 README 内容
 generate_readme() {
   local analysis_file="$1"
@@ -572,7 +683,7 @@ generate_readme() {
 
   log_info "使用 Ollama 生成双语 README..."
 
-  local chinese_content english_content
+  local chinese_content english_content final_content
 
   if [[ "$LANGUAGE" == "chinese" ]]; then
     # 中文优先模式：先生成中文，再生成英文
@@ -587,15 +698,13 @@ generate_readme() {
     fi
 
     # 创建双语 README，中文在前
-    cat >"$OUTPUT_FILE" <<EOF
-$chinese_content
+    final_content="${chinese_content}
 
 ---
 
 ## English Version
 
-$english_content
-EOF
+${english_content}"
   else
     # 英文优先模式：先生成英文，再生成中文
     if ! english_content=$(generate_english_readme "$analysis_file"); then
@@ -609,15 +718,19 @@ EOF
     fi
 
     # 创建双语 README，英文在前
-    cat >"$OUTPUT_FILE" <<EOF
-$english_content
+    final_content="${english_content}
 
 ---
 
 ## 中文版本
 
-$chinese_content
-EOF
+${chinese_content}"
+  fi
+
+  # 使用安全的 UTF-8 写入方法
+  if ! write_readme_file "$final_content" "$OUTPUT_FILE"; then
+    log_error "写入 README 文件失败"
+    return 1
   fi
 
   log_success "双语 README 文件已生成: $OUTPUT_FILE"

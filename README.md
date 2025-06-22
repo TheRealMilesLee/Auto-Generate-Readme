@@ -142,6 +142,10 @@ chmod +x run.sh
 - Java 项目 (Spring, Maven, Gradle 等)
 - C/C++ 项目
 - Rust 项目
+- iOS/macOS 项目 (Xcode, Swift, Objective-C)
+  - 支持 CocoaPods、Swift Package Manager、Carthage
+  - 自动检测 .xcodeproj 和 .xcworkspace 文件
+  - 包含 Xcode 版本和部署目标信息
 - 以及其他各种编程语言项目
 
 ## 故障排除
