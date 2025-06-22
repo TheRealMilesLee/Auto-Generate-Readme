@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # 默认扫描目录
-SCAN_DIR="${1:-/Users/silverhand/Developer/SourceRepo}"
+SCAN_DIR="${1:-../../}"
 
 # 颜色输出
 RED='\033[0;31m'

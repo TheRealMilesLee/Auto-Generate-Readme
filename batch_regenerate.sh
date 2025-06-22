@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # 默认扫描目录
-SCAN_DIR="/Users/silverhand/Developer/SourceRepo"
+SCAN_DIR="/mnt/e/SourceRepo/"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 RUN_SCRIPT="${SCRIPT_DIR}/run.sh"
 
