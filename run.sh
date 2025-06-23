@@ -630,40 +630,43 @@ generate_english_readme() {
     log_info "生成英文版 README..."
   } >&2
 
-  local prompt="You are a professional software documentation writer. Based on the following project analysis, please generate a comprehensive and well-structured README.md file.
+  local prompt="# DO NOT THINK. DO NOT EXPLAIN. JUST OUTPUT RAW MARKDOWN
 
-CRITICAL REQUIREMENTS:
-- Output ONLY raw Markdown content, no explanations, no thinking process, no additional text
-- Start directly with the markdown content (e.g., # Project Title)
-- Do not include any meta-commentary, explanations, or thinking process about the README
-- Do not wrap the content in code blocks or any other formatting
-- Generate ONLY the actual README.md file content that can be directly saved
-- Do not include any ANSI color codes or control characters
-- Do not include any thinking process like 'Thinking...' or '...done thinking.'
+You are ONLY allowed to output the content of a README.md file.
 
-The README should include:
-1. Project title and brief description
-2. Features and functionality
-3. Installation instructions (including Xcode setup for iOS/macOS projects)
-4. Usage examples
-5. Project structure explanation
-6. Dependencies and requirements (including CocoaPods, SPM, Carthage for iOS/macOS)
-7. Contributing guidelines
-8. License information
+## HARD CONSTRAINTS:
 
-For Xcode projects, please include:
-- iOS/macOS deployment targets
-- Xcode version requirements
-- Swift version compatibility
-- CocoaPods/Swift Package Manager setup instructions
-- Build and run instructions
+1. Output MUST START with the line:
+# ProjectName
 
-Use proper Markdown formatting. Make the README informative, professional, and easy to understand.
+2. DO NOT include:
+   - Any explanation
+   - Any thinking process
+   - Any system prompt
+   - Any description of what you're doing
+   - Any YAML, JSON, or quoted blocks
+   - NO prefix, NO suffix, NO comments
+
+3. You MUST output ONLY Markdown.
+NO plaintext. NO prose. NO system replies.
+
+4. Code blocks in markdown MUST be correctly wrapped.
+If you open a block with \`\`\`, you MUST close it.
+
+5. Examples of WRONG output (DO NOT DO THIS):
+ 'Here is your README:'
+ 'Thinking step-by-step...'
+6. If you add anything not in the README markdown, you FAIL.
+
+## FINAL INPUT:
 
 Project Analysis:
 $(cat "$analysis_file")
 
-Generate ONLY the complete README.md content (raw Markdown only, no explanations):"
+===> YOUR TASK:
+
+Generate the **README.md** for the project described above.
+DO NOT THINK. DO NOT EXPLAIN. OUTPUT ONLY RAW MARKDOWN."
 
   local readme_content
   # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉所有可能的杂质
@@ -671,6 +674,10 @@ Generate ONLY the complete README.md content (raw Markdown only, no explanations
     LC_ALL=C.UTF-8 TERM=dumb ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null |
       # 移除 ANSI 颜色代码和控制字符
       sed 's/\x1b\[[0-9;]*m//g' |
+      # 移除所有非README内容的行
+      sed '/^[^#]/,$!d' |
+      # 找到第一个以#开头的行，从那里开始
+      awk '/^#[[:space:]]/ {found=1} found {print}' |
       # 移除思考过程相关的行
       grep -v 'Thinking\.\.\.' |
       grep -v '\.\.\.done thinking\.' |
@@ -681,13 +688,22 @@ Generate ONLY the complete README.md content (raw Markdown only, no explanations
       grep -v '^Let me\|^I will\|^I have\|^Below is\|^Here is' |
       # 确保没有日志信息混入
       grep -v '\[INFO\]\|\[ERROR\]\|\[WARN\]\|\[SUCCESS\]' |
-      # 移除包装的代码块，保留内容
-      sed '/^```markdown$/,/^```$/{/^```markdown$/d; /^```$/d;}' |
-      # 移除末尾孤立的 ``` 行，保留代码块中的
-      awk 'BEGIN{buffer=""} {if($0=="```" && buffer!="" && buffer!~/```/) next; buffer=$0; print}' |
+      # 处理代码块包装问题
+      sed '/^```markdown$/d; /^```$/d' |
       # 移除可能的控制字符
       tr -d '\r'
   ); then
+
+    # 验证第一行是否为标题格式
+    local first_line
+    first_line=$(echo "$readme_content" | head -n 1)
+
+    if [[ ! "$first_line" =~ ^#[[:space:]] ]]; then
+      {
+        log_error "生成的英文 README 第一行不是标题格式: $first_line"
+      } >&2
+      return 1
+    fi
 
     # 最终清理：移除开头和结尾的空行
     readme_content=$(echo "$readme_content" | sed '/^$/d' | awk 'BEGIN{RS=""; ORS="\n\n"} {print}' | sed 's/\n\n$//')
@@ -717,11 +733,38 @@ generate_chinese_readme() {
     log_info "生成中文版 README..."
   } >&2
 
-  local prompt="Output README.md format only. Start with # title.
+  # 优化后的 prompt，使用更简明的要求
+  local prompt="注意：你**只能输出 README.md 的内容**，不得包含任何解释、注释或思考过程。以下是**严格输出规范**：
 
+【输出格式要求】
+1. 第一行必须是：
+# 项目名称
+
+2. 只能输出**纯 Markdown 格式内容**，不得包含：
+   - 任何解释说明（例如“这是你的README：”）
+   - 任何思考过程（例如“首先我会……”）
+   - 任何注释或元信息（例如“\`\`\`markdown”）
+   - 输出前后多余的自然语言、系统提示或“完成”等用语
+
+3. Markdown中的代码块必须成对出现：
+   - 如果你使用了 \`\`\` 开头，**必须有对应的 \`\`\` 结尾**
+
+4. **除 README 内容外的任何文字都不允许出现！**
+
+【示例 - 严禁出现以下输出】
+- '以下是README内容：'
+- '正在为你生成README……'
+- '思路如下：'
+- '\`\`\`markdown'
+- '感谢使用本系统'
+
+【你的任务】
+基于以下项目分析，直接输出最终的 README.md 文件内容，仅限 Markdown，无任何其它内容：
+
+项目分析：
 $(cat "$analysis_file")
 
-README:"
+===> 立即开始输出 README.md 内容，仅限 Markdown。禁止多余内容。"
 
   local readme_content
   # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉所有可能的杂质
@@ -729,16 +772,10 @@ README:"
     LC_ALL=C.UTF-8 TERM=dumb ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null |
       # 移除 ANSI 颜色代码和控制字符
       sed 's/\x1b\[[0-9;]*m//g' |
-      # 如果发现"好的，用户让我"这样的开头，直接跳到第一个 # 标题
-      awk '/^好的，用户让我/ {skip=1} /^#[[:space:]]/ {skip=0} !skip' |
-      # 移除思考过程相关的行
-      grep -v 'Thinking\.\.\.' |
-      grep -v '\.\.\.done thinking\.' |
-      grep -v '^思考中\.\.\.' |
-      grep -v '^\.\.\.思考完成\.' |
-      # 移除所有包含"好的"开头的思考过程段落
-      sed '/^好的，.*README/,/^#[[:space:]]/{ /^#[[:space:]]/!d; }' |
-      # 移除包含长篇思考过程的段落
+      # 找到第一个以#开头的行，从那里开始
+      awk '/^#[[:space:]]/ {found=1} found {print}' |
+      # 移除所有可能的思考过程文字
+      grep -v '好的，.*README' |
       grep -v '用户让我生成' |
       grep -v '基于他们提供' |
       grep -v '首先，我需要' |
@@ -768,6 +805,11 @@ README:"
       grep -v '最后，确保' |
       grep -v '现在，将所有信息' |
       grep -v '整合成符合要求' |
+      # 移除思考过程相关的行
+      grep -v 'Thinking\.\.\.' |
+      grep -v '\.\.\.done thinking\.' |
+      grep -v '^思考中\.\.\.' |
+      grep -v '^\.\.\.思考完成\.' |
       # 移除常见的中文解释性开头
       grep -v '^好的' |
       grep -v '^我现在需要' |
@@ -793,21 +835,28 @@ README:"
       grep -v '^让我\|^我会\|^我已经\|^下面是\|^这里是' |
       # 确保没有日志信息混入
       grep -v '\[INFO\]\|\[ERROR\]\|\[WARN\]\|\[SUCCESS\]' |
-      # 移除包装的代码块，保留内容
-      sed '/^```markdown$/,/^```$/{/^```markdown$/d; /^```$/d;}' |
-      # 移除末尾孤立的 ``` 行
-      sed '${/^```$/d;}' |
+      # 处理代码块包装问题
+      sed '/^```markdown$/d; /^```$/d' |
       # 移除包含"处理"、"需要"、"生成"等词的解释性句子开头
       grep -v '^.*处理.*请求' |
       grep -v '^.*需要.*生成' |
       grep -v '^.*符合要求' |
       # 检测并移除长段思考文字（超过100字符且不以#开头的行）
       awk 'length($0) > 100 && !/^#/ && /需要|确保|可能|用户|项目|功能|安装|使用|依赖|贡献|许可证/ {next} {print}' |
-      # 只保留从第一个 # 标题开始的内容
-      awk '/^#[[:space:]]/ {found=1} found' |
       # 移除可能的控制字符
       tr -d '\r'
   ); then
+
+    # 验证第一行是否为标题格式
+    local first_line
+    first_line=$(echo "$readme_content" | head -n 1)
+
+    if [[ ! "$first_line" =~ ^#[[:space:]] ]]; then
+      {
+        log_error "生成的中文 README 第一行不是标题格式: $first_line"
+      } >&2
+      return 1
+    fi
 
     # 最终清理：移除开头和结尾的空行
     readme_content=$(echo "$readme_content" | sed '/^$/d' | awk 'BEGIN{RS=""; ORS="\n\n"} {print}' | sed 's/\n\n$//')
@@ -895,7 +944,95 @@ check_existing_readme() {
   return 1 # 需要生成
 }
 
-# 安全写入文件（确保 UTF-8 编码）
+# 后处理README内容，移除思考过程
+post_process_readme() {
+  local content="$1"
+
+  # 检查第一行是否为标题格式
+  local first_line
+  first_line=$(echo "$content" | head -n 1)
+
+  if [[ ! "$first_line" =~ ^#[[:space:]] ]]; then
+    log_error "README第一行不是标题格式，需要清理"
+    # 找到第一个标题行，从那里开始
+    content=$(echo "$content" | awk '/^#[[:space:]]/ {found=1} found {print}')
+  fi
+
+  # 移除长段思考过程（超过150字符且包含特定关键词的段落）
+  content=$(echo "$content" | awk '
+  BEGIN {
+    in_thinking = 0
+    buffer = ""
+  }
+  {
+    # 检测思考过程段落
+    if (length($0) > 150 && !/^#/ &&
+        ($0 ~ /根据.*分析|基于.*信息|首先.*需要|接下来.*是|这个.*项目|用户.*要求|生成.*README|处理.*请求|确保.*功能|可能.*涉及|需要.*包括|项目.*结构|依赖.*管理|贡献.*指南|许可证.*信息/)) {
+      in_thinking = 1
+      next
+    }
+
+    # 如果遇到标题或空行，结束思考过程模式
+    if (/^#/ || /^$/) {
+      in_thinking = 0
+    }
+
+    # 如果不在思考过程中，输出这一行
+    if (!in_thinking) {
+      print $0
+    }
+  }')
+
+  # 移除连续的多个空行
+  content=$(echo "$content" | awk '
+  BEGIN { empty_count = 0 }
+  /^$/ {
+    empty_count++
+    if (empty_count <= 2) print
+    next
+  }
+  { empty_count = 0; print }
+  ')
+
+  echo "$content"
+}
+
+# 验证README内容质量
+validate_readme_content() {
+  local content="$1"
+
+  # 检查第一行
+  local first_line
+  first_line=$(echo "$content" | head -n 1)
+
+  if [[ ! "$first_line" =~ ^#[[:space:]] ]]; then
+    log_error "README验证失败：第一行不是标题格式"
+    return 1
+  fi
+
+  # 检查是否包含明显的思考过程文字
+  if echo "$content" | head -n 5 | grep -qE '(好的，|我现在|让我来|我将|根据您的要求|基于以上分析|处理用户的请求|生成一个符合要求)'; then
+    log_error "README验证失败：包含思考过程文字"
+    return 1
+  fi
+
+  # 检查是否有过长的非标题行（可能是思考过程）
+  local long_lines
+  long_lines=$(echo "$content" | head -n 10 | awk 'length($0) > 200 && !/^#/ {print NR ": " substr($0, 1, 100) "..."}')
+  if [[ -n "$long_lines" ]]; then
+    log_warn "发现可能的思考过程长行：$long_lines"
+    return 1
+  fi
+
+  # 检查内容长度
+  if [[ ${#content} -lt 100 ]]; then
+    log_error "README验证失败：内容过短"
+    return 1
+  fi
+
+  log_success "README内容验证通过"
+  return 0
+}
 write_readme_file() {
   local content="$1"
   local output_file="$2"
@@ -963,9 +1100,35 @@ generate_readme() {
       return 1
     fi
 
+    # 后处理中文内容
+    chinese_content=$(post_process_readme "$chinese_content")
+
+    # 验证中文内容
+    if ! validate_readme_content "$chinese_content"; then
+      log_error "中文README验证失败，尝试重新生成"
+      if ! chinese_content=$(generate_chinese_readme "$analysis_file"); then
+        log_error "重新生成中文版本失败"
+        return 1
+      fi
+      chinese_content=$(post_process_readme "$chinese_content")
+    fi
+
     if ! english_content=$(generate_english_readme "$analysis_file"); then
       log_error "生成英文版本失败"
       return 1
+    fi
+
+    # 后处理英文内容
+    english_content=$(post_process_readme "$english_content")
+
+    # 验证英文内容
+    if ! validate_readme_content "$english_content"; then
+      log_error "英文README验证失败，尝试重新生成"
+      if ! english_content=$(generate_english_readme "$analysis_file"); then
+        log_error "重新生成英文版本失败"
+        return 1
+      fi
+      english_content=$(post_process_readme "$english_content")
     fi
 
     # 创建双语 README，中文在前
@@ -983,9 +1146,35 @@ ${english_content}"
       return 1
     fi
 
+    # 后处理英文内容
+    english_content=$(post_process_readme "$english_content")
+
+    # 验证英文内容
+    if ! validate_readme_content "$english_content"; then
+      log_error "英文README验证失败，尝试重新生成"
+      if ! english_content=$(generate_english_readme "$analysis_file"); then
+        log_error "重新生成英文版本失败"
+        return 1
+      fi
+      english_content=$(post_process_readme "$english_content")
+    fi
+
     if ! chinese_content=$(generate_chinese_readme "$analysis_file"); then
       log_error "生成中文版本失败"
       return 1
+    fi
+
+    # 后处理中文内容
+    chinese_content=$(post_process_readme "$chinese_content")
+
+    # 验证中文内容
+    if ! validate_readme_content "$chinese_content"; then
+      log_error "中文README验证失败，尝试重新生成"
+      if ! chinese_content=$(generate_chinese_readme "$analysis_file"); then
+        log_error "重新生成中文版本失败"
+        return 1
+      fi
+      chinese_content=$(post_process_readme "$chinese_content")
     fi
 
     # 创建双语 README，英文在前
@@ -996,6 +1185,12 @@ ${english_content}"
 ## 中文版本
 
 ${chinese_content}"
+  fi
+
+  # 最终验证合并后的内容
+  if ! validate_readme_content "$final_content"; then
+    log_error "最终README内容验证失败"
+    return 1
   fi
 
   # 使用安全的 UTF-8 写入方法
