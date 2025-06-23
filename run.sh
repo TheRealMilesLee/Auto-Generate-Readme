@@ -717,29 +717,11 @@ generate_chinese_readme() {
     log_info "生成中文版 README..."
   } >&2
 
-  local prompt="直接生成README.md文件内容，不要任何解释文字。
+  local prompt="Output README.md format only. Start with # title.
 
-必须严格遵守：
-- 立即开始输出README内容，第一行就是项目标题（# 项目名称）
-- 绝对不要输出"好的"、"我现在需要"、"让我来"等任何解释性文字
-- 绝对不要输出思考过程或元评论
-- 只输出可以直接保存为README.md的纯Markdown内容
-- 不要包装在代码块中
-
-README包含这些部分：
-1. 项目标题和描述
-2. 功能特性
-3. 安装说明
-4. 使用示例
-5. 项目结构
-6. 依赖要求
-7. 贡献指南
-8. 许可证信息
-
-项目分析：
 $(cat "$analysis_file")
 
-现在直接开始输出README内容："
+README:"
 
   local readme_content
   # 确保 Ollama 输出使用 UTF-8 编码，并过滤掉所有可能的杂质
@@ -747,11 +729,45 @@ $(cat "$analysis_file")
     LC_ALL=C.UTF-8 TERM=dumb ollama run "$OLLAMA_MODEL" "$prompt" 2>/dev/null |
       # 移除 ANSI 颜色代码和控制字符
       sed 's/\x1b\[[0-9;]*m//g' |
+      # 如果发现"好的，用户让我"这样的开头，直接跳到第一个 # 标题
+      awk '/^好的，用户让我/ {skip=1} /^#[[:space:]]/ {skip=0} !skip' |
       # 移除思考过程相关的行
       grep -v 'Thinking\.\.\.' |
       grep -v '\.\.\.done thinking\.' |
       grep -v '^思考中\.\.\.' |
       grep -v '^\.\.\.思考完成\.' |
+      # 移除所有包含"好的"开头的思考过程段落
+      sed '/^好的，.*README/,/^#[[:space:]]/{ /^#[[:space:]]/!d; }' |
+      # 移除包含长篇思考过程的段落
+      grep -v '用户让我生成' |
+      grep -v '基于他们提供' |
+      grep -v '首先，我需要' |
+      grep -v '仔细阅读用户' |
+      grep -v '确保不遗漏' |
+      grep -v '项目名称是' |
+      grep -v '看起来像是' |
+      grep -v '可能涉及' |
+      grep -v '用户要求的结构' |
+      grep -v '对于Xcode项目' |
+      grep -v '还需要包括' |
+      grep -v '部署目标' |
+      grep -v '项目标题和描述部分' |
+      grep -v '需要简明扼要' |
+      grep -v '根据目录结构' |
+      grep -v '可能这是一个' |
+      grep -v '需要确认项目' |
+      grep -v '接下来是功能部分' |
+      grep -v '安装说明部分' |
+      grep -v '使用示例部分' |
+      grep -v '项目结构解释' |
+      grep -v '依赖项部分' |
+      grep -v '贡献指南需要' |
+      grep -v '许可证信息' |
+      grep -v '在处理Xcode项目时' |
+      grep -v '需要注意用户' |
+      grep -v '最后，确保' |
+      grep -v '现在，将所有信息' |
+      grep -v '整合成符合要求' |
       # 移除常见的中文解释性开头
       grep -v '^好的' |
       grep -v '^我现在需要' |
@@ -785,8 +801,10 @@ $(cat "$analysis_file")
       grep -v '^.*处理.*请求' |
       grep -v '^.*需要.*生成' |
       grep -v '^.*符合要求' |
-      # 只保留以 # 开头或者明显是 Markdown 内容的行，跳过第一个非 Markdown 行
-      awk 'BEGIN{found_md=0} /^#/ {found_md=1; print; next} found_md==1 {print} found_md==0 && /^[^#]/ && !/^$/ {next} {print}' |
+      # 检测并移除长段思考文字（超过100字符且不以#开头的行）
+      awk 'length($0) > 100 && !/^#/ && /需要|确保|可能|用户|项目|功能|安装|使用|依赖|贡献|许可证/ {next} {print}' |
+      # 只保留从第一个 # 标题开始的内容
+      awk '/^#[[:space:]]/ {found=1} found' |
       # 移除可能的控制字符
       tr -d '\r'
   ); then
