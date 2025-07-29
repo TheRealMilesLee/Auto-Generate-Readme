@@ -630,33 +630,17 @@ generate_english_readme() {
     log_info "生成英文版 README..."
   } >&2
 
-  local prompt="# DO NOT THINK. DO NOT EXPLAIN. JUST OUTPUT RAW MARKDOWN
+  local prompt="You are a professional technical documentation generator. Read the source code and comments in the current directory and generate a well-structured, properly formatted, and detailed README.md file. Follow these rules:
 
-You are ONLY allowed to output the content of a README.md file.
+1. Clearly and concisely describe the project's goals and core functionality;
+2. Display the file structure using standard Markdown syntax (file tree), with correct indentation and bullet formatting;
+3. Include appropriate sections: Project Overview, Installation, Usage, File Structure, Dependencies, Contribution Guidelines, etc.;
+4. Extract accurate technical information from code comments, but exclude subjective reasoning, debugging notes, or thought processes;
+5. The output must be cleanly formatted, neutrally written, logically structured, and aligned with open-source documentation conventions;
+6. Ensure all Markdown syntax renders correctly — especially code blocks, lists, and headings.
 
-## HARD CONSTRAINTS:
+Only output the content of the final README.md file, with no additional explanation.
 
-1. Output MUST START with the line:
-# ProjectName
-
-2. DO NOT include:
-   - Any explanation
-   - Any thinking process
-   - Any system prompt
-   - Any description of what you're doing
-   - Any YAML, JSON, or quoted blocks
-   - NO prefix, NO suffix, NO comments
-
-3. You MUST output ONLY Markdown.
-NO plaintext. NO prose. NO system replies.
-
-4. Code blocks in markdown MUST be correctly wrapped.
-If you open a block with \`\`\`, you MUST close it.
-
-5. Examples of WRONG output (DO NOT DO THIS):
- 'Here is your README:'
- 'Thinking step-by-step...'
-6. If you add anything not in the README markdown, you FAIL.
 
 ## FINAL INPUT:
 
@@ -734,32 +718,17 @@ generate_chinese_readme() {
   } >&2
 
   # 优化后的 prompt，使用更简明的要求
-  local prompt="注意：你**只能输出 README.md 的内容**，不得包含任何解释、注释或思考过程。以下是**严格输出规范**：
+  local prompt="你是一个专业的技术文档生成工具。请读取当前目录下的源代码与注释信息，并据此生成一份结构规范、格式正确、内容详实的 README.md 文件。生成规则如下：
 
-【输出格式要求】
-1. 第一行必须是：
-# 项目名称
+1. 用清晰简练的语言描述项目的目标与主要功能；
+2. 使用标准的 Markdown 格式展示项目结构（文件树），注意缩进和符号规范；
+3. 包含以下内容段落（如适用）：项目简介、安装方式、使用方法、项目结构说明、依赖项、开发与贡献指南；
+4. 从源代码注释中提取准确的技术信息，剔除主观的思考、调试过程、推理过程；
+5. 输出内容应排版整齐、语言中性、逻辑清晰，符合开源项目文档标准；
+6. 所有 Markdown 语法必须正确渲染，不得出现格式错误。
 
-2. 只能输出**纯 Markdown 格式内容**，不得包含：
-   - 任何解释说明（例如“这是你的README：”）
-   - 任何思考过程（例如“首先我会……”）
-   - 任何注释或元信息（例如“\`\`\`markdown”）
-   - 输出前后多余的自然语言、系统提示或“完成”等用语
+输出只包括最终的 README.md 内容，不包含额外说明。
 
-3. Markdown中的代码块必须成对出现：
-   - 如果你使用了 \`\`\` 开头，**必须有对应的 \`\`\` 结尾**
-
-4. **除 README 内容外的任何文字都不允许出现！**
-
-【示例 - 严禁出现以下输出】
-- '以下是README内容：'
-- '正在为你生成README……'
-- '思路如下：'
-- '\`\`\`markdown'
-- '感谢使用本系统'
-
-【你的任务】
-基于以下项目分析，直接输出最终的 README.md 文件内容，仅限 Markdown，无任何其它内容：
 
 项目分析：
 $(cat "$analysis_file")
