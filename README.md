@@ -1,114 +1,142 @@
 # Auto-Generate-Readme
-## Project Overview
-This project provides a tool to automatically generate README.md files by extracting technical information from source code and comments. The core functionality includes:
-- Parsing Python source code and comments
-- Structuring extracted data into standardized documentation
-- Supporting multiple file types and directory structures
-- Generating human-readable documentation with proper formatting
-The implementation leverages Python scripting and shell utilities to automate documentation generation, with a focus on maintaining clean, organized output aligned with open-source conventions.
-## Installation
-1. Clone the repository
-2. Install Python dependencies (if required):
+
+> EN: Tooling to parse source code (Python) & inline comments, then synthesize structured README documentation via configurable templates.
+> 中文: 解析源码与注释，通过可配置模板自动生成结构化 README 文档的工具。
+
+## ✨ Features / 特性
+- Parse Python modules & extract docstrings / comments
+- Template-driven sections (支持占位符替换)
+- Multi-file traversal with ignore patterns
+- Optional metadata enrichment (文件计数、语言统计)
+- CLI output to stdout or write file
+
+## 📦 Installation / 安装
 ```bash
-pip install -r requirements.txt
-3. Ensure shell utilities are available in your PATH
-## Usage
-1. Run the main script:
+git clone <repo-url>
+cd Auto-Generate-Readme
+python -m venv .venv && source .venv/bin/activate
+pip install -e .        # (如含 setup.py)
+# 或直接运行脚本无需安装
+```
+
+## 🚀 Usage / 使用
+Basic:
 ```bash
-python main.py
-2. Alternatively, use the example script:
+python main.py --path ./target_project --output README.md
+```
+Example script:
 ```bash
-python example.py
-3. Customize configuration in `config.yaml` as needed
-## File Structure
-.
-├── PythonProject
-│   ├── .vscode
-│   ├── readme_generator
-│   │   ├── __pycache__
-│   │   ├── main.py
-│   │   ├── example.py
-│   │   ├── test_basic.py
-│   │   └── utils.py
-│   ├── .sample
-│   ├── .md
-│   ├── .json
-│   ├── .yaml
-│   ├── .txt
-│   ├── .sh
-│   └── LICENSE
-│   └── .git
-└── .pack
-└── .index
-## Dependencies
-- Python 3.x
-- Required libraries (check `setup.py` for specifics)
-- Shell utilities (bash/sh)
-## Contribution Guidelines
-- Review existing code comments for implementation details
-- Test changes using `test_basic.py`
-- Update documentation in `README.md` and `config.yaml`
-- Maintain compatibility with Python 3.x
-- Follow the project license terms (see LICENSE)
-## Development
-- Entry points: `main.py`, `example.py`
-- Test suite: `test_basic.py`
-- Configuration: `config.yaml`
-- License: `LICENSE`
+python example.py --path ./PythonProject --stdout
+```
+Help:
+```bash
+python main.py --help
+```
+
+### Common Arguments / 常用参数
+| Flag | 描述 | EN |
+|------|------|----|
+| `--path` | 目标项目路径 | Target project path |
+| `--output` | 输出文件路径 | Output file path |
+| `--stdout` | 打印到控制台 | Print to stdout |
+| `--template` | 模板文件 | Template file path |
+| `--max-depth` | 遍历最大深度 | Max directory depth |
+| `--ignore` | 忽略模式 (逗号分隔) | Ignore glob patterns |
+
+## 🗂 Structure / 目录结构 (示例)
+```
+PythonProject/
+   readme_generator/
+      main.py          # CLI 入口
+      utils.py         # 工具函数
+      example.py       # 使用示例
+      test_basic.py    # 测试用例
+      templates/       # 模板集合 (可选)
+setup.py             # 包配置 (如存在)
+run.sh               # 快捷脚本
+```
+
+## 🧠 Template System / 模板系统
+支持占位符：
+```
+{{PROJECT_NAME}}  {{FILE_COUNT}}  {{PYTHON_VERSION}}
+{{SECTION:usage}}  # 引用 usage 子块
+```
+示例最简模板：
+```
+# {{PROJECT_NAME}}
+Total Python files: {{FILE_COUNT}}
+{{SECTION:description}}
+```
+
+## 🔍 Extraction Logic / 提取逻辑
+流程：文件遍历 → 过滤 (ignore) → 解析 AST → 收集函数/类 docstring → 聚合统计 → 渲染模板。
+
+伪代码：
+```python
+def collect(path):
+      for file in python_files(path):
+            tree = ast.parse(open(file).read())
+            for node in ast.walk(tree):
+                  if isinstance(node, ast.FunctionDef):
+                        docs[node.name] = ast.get_docstring(node) or ''
+      return docs
+```
+
+## 🧪 Testing / 测试
+Run basic tests:
+```bash
+pytest -q            # 若已添加 pytest 支持
+python readme_generator/test_basic.py
+```
+建议新增：模板渲染结果快照测试、忽略模式匹配测试、AST 解析异常捕获测试。
+
+## ⚙️ Configuration / 配置文件 (`config.yaml` 建议示例)
+```yaml
+project_name: SampleProject
+include_patterns: ['**/*.py']
+ignore_patterns: ['tests/*', 'build/*']
+template: templates/default.md.j2
+sections:
+   description: 'Auto generated description.'
+   usage: 'python main.py --help'
+```
+
+## 📈 Metrics / 指标示例
+| Metric | Value |
+|--------|-------|
+| Python files | (count) |
+| Empty docstrings | (count) |
+| Functions parsed | (count) |
+| Classes parsed | (count) |
+
+## 🧩 Extension Ideas / 拓展
+- 支持多语言解析 (JavaScript, Go)
+- 引入 Jinja2 模板引擎
+- Git 提交统计 (最近变更/贡献者)
+- 生成徽章（行数 / 测试覆盖率）
+- 输出多格式：Markdown / HTML / JSON
+
+## 🤝 Contributing / 贡献
+1. 遵循 PEP8 + 添加类型标注
+2. 新增功能附加最小测试
+3. 模板变量需在文档中登记表格
+4. 提交前：
+```bash
+flake8 || echo "Lint reviewed"
+black --check . || echo "Formatting suggestions"
+```
+
+## 📄 License / 许可证
+See `LICENSE` (MIT 或其他)。
+
+## Roadmap / 后续规划
+- [ ] 支持并行解析提高速度
+- [ ] 增加缓存避免重复解析大项目
+- [ ] 增加 `--dry-run` 仅打印统计
+- [ ] 插件式提取器（函数/类/注释自定义）
 
 ---
+### 中文速览
+克隆 → 安装依赖 → 指定 path 与 template → 生成 README → 可扩展多语言与统计。
 
-## 中文版本
-
-# Auto-Generate-Readme
-## 项目简介
-Auto-Generate-Readme 是一个自动化生成项目文档的工具，通过解析代码结构、注释信息及配置文件，生成符合开源标准的 README.md 文档。支持多格式输出与自定义模板配置。
-## 安装方式
-```bash
-pip install -e .
-或从源码目录运行：
-```bash
-python setup.py develop
-## 使用方法
-1. 将项目根目录作为工作目录
-2. 运行主程序：
-```bash
-python main.py --output README.md
-3. 通过配置文件 `config.yaml` 自定义生成规则
-## 项目结构说明
-.
-├── PythonProject
-│   ├── .vscode
-│   └── readme_generator
-│       ├── __pycache__
-│       ├── generator.py        # 核心生成逻辑
-│       ├── parser.py           # 代码结构解析模块
-│       └── template.py         # 模板渲染引擎
-├── .sample
-├── .pyc
-├── .master
-├── .md
-├── .json
-├── .yaml
-├── LICENSE
-├── example.py
-├── main.py
-├── setup.py
-└── test_basic.py
-## 依赖项
-```text
-Python >= 3.8
-PyYAML
-json5
-## 开发与贡献指南
-1. 代码规范：遵循 PEP8 标准，使用 `black` 格式化工具
-2. 测试要求：所有新功能需配套单元测试（参见 `test_basic.py`）
-3. 提交规范：
-   - 提交前运行 `flake8` 检查
-   - 使用 `git commit -m "描述"` 提交
-   - 通过 `python setup.py sdist` 生成发布包
-4. 贡献流程：
-   - Fork 项目仓库
-   - 创建功能分支
-   - 提交代码变更
-   - 开发者需提供单元测试覆盖率 ≥ 90%
