@@ -1,7 +1,9 @@
 # Benchmarks
 
-Numbers below are measured, not estimated. Re-run the commands on your own
-machine; filesystem cache and disk type dominate the cold scan.
+Deterministic numbers below are measured, not estimated. Re-run the commands on
+your own machine; filesystem cache and disk type dominate the cold scan. The LLM
+table is explicitly labelled as an estimate, because model latency depends on
+hardware, TGP and thermals.
 
 ## Environment
 
@@ -72,16 +74,43 @@ every link, and traces every number.
 
 ## LLM prose
 
-Not benchmarked here because it depends on the model and hardware. The design
-goal is that the model is **not** on the hot path:
+The numbers above are deterministic and measured. Model latency is not: it
+depends on the GPU, TGP, thermals, context and quantisation, so the table below
+is an **estimate** for the project's target laptop, not a measurement.
 
-- `llama-server` keeps the model and KV cache loaded;
-- only prose sections (`why`, `audience`) call the model;
-- responses are cached by facts hash + prompt version + model, so a rebuild
-  with unchanged facts performs zero requests;
-- deterministic builds never touch the network.
+### Target laptop
 
-On an 8B Q4 model, expect seconds per section rather than per document.
+| Item | Value |
+|---|---|
+| CPU | Ryzen 7 7735HS (8C/16T, Zen 3+) |
+| RAM | 32 GB DDR5-4800 (dual channel, ~76.8 GB/s theoretical) |
+| GPU | RTX 4070 Laptop, 8 GB GDDR6 |
+| Storage | 3 TB SSD |
+| OS | Windows (Git Bash / PowerShell) or Linux |
+
+8 GB VRAM is the hard constraint; 32 GB RAM is what makes 14B and 30B-A3B
+partial offload practical. Close GPU-heavy applications before serving.
+
+### Estimated generation speed
+
+| Model | Quant | Placement | Generation | 400-token section |
+|---|---|---|---|---|
+| Qwen3-4B-Instruct-2507 | `Q5_K_M` | full GPU | 60–90 tok/s | ~5 s |
+| Qwen2.5-7B / Qwen3-8B | `Q5_K_M` | full GPU | 35–55 tok/s | ~8–12 s |
+| Qwen3-14B | `Q4_K_M` | partial (GPU + CPU) | 12–20 tok/s | ~20–35 s |
+| Qwen3-30B-A3B | `Q4_K_M` | partial (MoE) | 10–18 tok/s | ~25–40 s |
+
+A build writes at most two prose sections, and responses are cached by facts
+hash + prompt version + model. The first run costs seconds to tens of seconds;
+a rebuild with unchanged facts performs zero requests. Deterministic builds
+never touch the network.
+
+These figures assume CUDA, 8k context, the model already loaded, and a laptop
+TGP around 100 W. Sustained loads throttle; battery mode is slower. Do not use
+them as a model benchmark — use them to choose a starting point, then measure
+on your own machine.
+
+Model-specific launch flags and alternatives: [MODELS.md](MODELS.md).
 
 ## Reading the numbers
 

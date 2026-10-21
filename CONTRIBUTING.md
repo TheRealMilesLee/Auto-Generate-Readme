@@ -33,6 +33,9 @@ components are not installed.
    so the checker can approve it; otherwise `check --strict` fails.
 5. **Keep it dependency-free.** The crate builds with the standard library
    only; adding a crate needs a strong justification and a cross-platform test.
+6. **Model choices are documentation, not code.** Recommended models, quants and
+   launch flags live in [docs/MODELS.md](docs/MODELS.md); do not hardcode
+   model-specific prompts in the renderer.
 
 ## Adding a language
 

@@ -532,7 +532,7 @@ fn llm_options(cli: &Cli, config: &Config, root: &Path) -> Option<llm::Options> 
         .clone()
         .or_else(|| config.llm.model.clone())
         .or_else(|| match provider {
-            Some("ollama") => Some("qwen3:8b".to_string()),
+            Some("ollama") => Some("qwen2.5:7b-instruct".to_string()),
             _ => Some("local".to_string()),
         })
         .unwrap_or_else(|| "local".to_string());
@@ -688,12 +688,17 @@ OPTIONS:
 LLM (optional, for prose sections only):
     --llm PROVIDER     none | llama.cpp | ollama | http://host:port
     --endpoint URL     OpenAI-compatible endpoint
-    --model NAME       Model name (default: local, or qwen3:8b for Ollama)
+    --model NAME       Model name (default: local, or qwen2.5:7b-instruct for Ollama)
     --api-key KEY      Bearer token
     --temperature N    Sampling temperature (default: 0.2)
     --max-tokens N     Max tokens per section (default: 500)
     --timeout SECS     HTTP timeout (default: 180)
     --no-cache         Disable the LLM response cache
+
+MODELS:
+    Recommended: Qwen2.5-7B-Instruct Q5_K_M (no thinking, fits 8 GB VRAM).
+    Newer:      Qwen3-8B Q5_K_M with --reasoning-budget 0 on the server.
+    Full guide: docs/MODELS.md
 
 EXAMPLES:
     readme-gen scan --root . --out .readme/facts.json

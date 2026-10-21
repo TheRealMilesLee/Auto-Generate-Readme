@@ -144,16 +144,32 @@ The output is `target/release/readme-gen` (`readme-gen.exe` on Windows).
 
 ## 6. LLM integration
 
+The model is optional and only writes prose. On the reference machine
+(Ryzen 7 7735HS, 32 GB DDR5, RTX 4070 Laptop 8 GB), a 7–8B model at `Q5_K_M`
+fits fully in VRAM; sizes, flags and alternatives are in
+[MODELS.md](MODELS.md).
+
 ```
+# terminal A: keep the model resident
+llama-server -m models/Qwen2.5-7B-Instruct-Q5_K_M.gguf \
+  --host 127.0.0.1 --port 8080 -ngl 99 -c 8192 -fa on --jinja
+
+# terminal B
 readme-gen build --llm llama.cpp --model local
-llama-server -m models/qwen3-8b.gguf --port 8080 -c 8192
 ```
+
+`--model` is a label for a single-model `llama-server`; with Ollama it selects
+the model (`--llm ollama --model qwen2.5:7b-instruct`). The client does not send
+a thinking flag, so prefer a non-thinking model or disable reasoning at the
+server (`--reasoning-budget 0` in recent llama.cpp builds, or a chat-template
+kwarg). A thinking model that writes its reasoning into the section will be
+rejected by the validator.
 
 The client sends `POST /v1/chat/completions` with:
 
 - a system prompt that forbids invented facts, headings and code fences;
 - a compact fact sheet (`Facts::brief()`), taglines, and annotated folder
-  summaries — never the whole repository;
+  summaries — never the whole repository, and never file contents;
 - `temperature` (default 0.2) and `max_tokens` (default 500).
 
 Every response goes through the same number tracer as `check`. If a number is
@@ -173,7 +189,7 @@ Measured on the reference repository (macOS, Apple silicon):
 |---|---|
 | scan 2,717 files / 5.8 GiB (no file reads) | 0.10 s warm, 1.0 s cold |
 | deterministic build | 0.06 s for an 11.7 KiB bilingual document |
-| LLM prose | dominated by the model; cached after the first run |
+| LLM prose | model-dependent; seconds per section, cached after the first run (see [MODELS.md](MODELS.md)) |
 
 The scanner is single-threaded. At this scale the syscall cost is tiny and
 parallelism would add nondeterminism; if a repository with 500k files ever
@@ -197,7 +213,8 @@ It warns on heading-level jumps, missing anchor targets, and malformed markers.
 ## 9. Known limitations
 
 - `readme.yml` supports a YAML subset: no anchors, aliases, tags or flow maps.
-- The LLM client is HTTP-only and non-streaming.
+- The LLM client is HTTP-only and non-streaming, and does not control the
+  model's thinking mode; disable it at the server or use a non-thinking model.
 - Only Markdown is emitted; HTML/JSON output is not implemented.
 - Symlinked directories are skipped.
 - Number tracing allows years, semver-like versions, resolutions and `4K`/`1080p`

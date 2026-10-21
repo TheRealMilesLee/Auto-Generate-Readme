@@ -87,12 +87,16 @@ sections:
       readme-gen check --strict
       ```
 
-      To let a local model write the prose sections:
+      To let a local model write the prose sections (a 7–8B model is enough):
 
       ```bash
-      llama-server -m models/qwen3-8b.gguf --port 8080 -c 8192
+      llama-server -m models/Qwen2.5-7B-Instruct-Q5_K_M.gguf \
+        --host 127.0.0.1 --port 8080 -ngl 99 -c 8192 -fa on --jinja
       readme-gen build --llm llama.cpp --model local
       ```
+
+      See [the model guide](docs/MODELS.md) for 8 GB / 32 GB hardware profiles,
+      quantisation and alternatives.
 
       `check` is the gate: it verifies links, anchors, markers, bilingual parity,
       and that every number in the document exists in the facts or in this file.
@@ -106,12 +110,15 @@ sections:
       readme-gen check --strict
       ```
 
-      允许本地模型撰写散文：
+      允许本地模型撰写散文（7–8B 已经够用）：
 
       ```bash
-      llama-server -m models/qwen3-8b.gguf --port 8080 -c 8192
+      llama-server -m models/Qwen2.5-7B-Instruct-Q5_K_M.gguf \
+        --host 127.0.0.1 --port 8080 -ngl 99 -c 8192 -fa on --jinja
       readme-gen build --llm llama.cpp --model local
       ```
+
+      模型大小、量化、显存预算与替代方案见 [模型指南](docs/MODELS.md)。
 
       `check` 是闸门：它检查链接、锚点、标记、双语对齐，以及文档里的每个数字
       是否都存在于事实或本文件中。

@@ -228,15 +228,43 @@ This paragraph is written by a human and survives every rebuild.
 
 ## LLM settings
 
+The model is optional and only writes the prose sections (`why`, `audience`).
+It never supplies numbers or paths.
+
 ```yaml
 llm:
   endpoint: http://127.0.0.1:8080
-  model: local
+  model: qwen2.5-7b
   temperature: 0.2
 ```
 
+```bash
+# llama.cpp (recommended on 8 GB VRAM)
+llama-server -m models/Qwen2.5-7B-Instruct-Q5_K_M.gguf \
+  --host 127.0.0.1 --port 8080 -ngl 99 -c 8192 -fa on --jinja
+
+readme-gen build --llm llama.cpp --model qwen2.5-7b
+```
+
 CLI flags override the file. `--llm none` disables generation even if the file
-sets an endpoint.
+sets an endpoint. `--model` is a label for a single-model `llama-server`; with
+Ollama it selects the model (`--llm ollama --model qwen2.5:7b-instruct`).
+
+Model size, quantisation, VRAM budgets and Windows/Linux launch flags are in
+[MODELS.md](MODELS.md). The short version for the reference machine
+(RTX 4070 Laptop 8 GB):
+
+| Need | Model | Quant |
+|---|---|---|
+| Safe default, no thinking | `Qwen2.5-7B-Instruct` | `Q5_K_M` |
+| Newer, disable thinking | `Qwen3-8B` | `Q5_K_M` |
+| Better prose, partial offload | `Qwen3-14B` | `Q4_K_M` |
+| Maximum quality on 32 GB RAM | `Qwen3-30B-A3B` | `Q4_K_M` |
+
+Thinking models must be launched with reasoning disabled
+(`--reasoning-budget 0` in recent llama.cpp builds, or a chat-template kwarg).
+The client does not send a thinking flag, and a section that contains the
+model's reasoning will fail validation.
 
 ## Check rules
 
