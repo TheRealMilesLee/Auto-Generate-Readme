@@ -1,0 +1,123 @@
+preset: cli
+locale: [en, zh]
+
+exclude:
+  - legacy/
+
+project:
+  name: readme-gen
+  tagline:
+    en: "READMEs that cannot lie about their numbers."
+    zh: "不会在数字上撒谎的 README 生成器。"
+  description:
+    en: "A zero-dependency Rust CLI that scans repository facts, renders a consistent structure, and optionally uses a local llama.cpp model for prose."
+    zh: "零依赖 Rust CLI：扫描仓库事实、渲染稳定结构，可选本地 llama.cpp 模型撰写散文。"
+
+quickstart:
+  clone: https://github.com/TheRealMilesLee/Auto-Generate-Readme.git
+
+sections:
+  why:
+    en: |
+      READMEs rot for a simple reason: the numbers are written by hand. A hero
+      line that says "3,000 images" is correct on the day it is typed and wrong
+      three months later. Structure drifts the same way.
+
+      This tool splits the problem into three layers. **Facts** are scanned from
+      the repository — counts, sizes, languages, folders, dependencies, git.
+      **Meaning** lives in a reviewable `readme.yml`. **Rendering** is
+      deterministic. A rebuild is boring: same facts in, byte-identical document
+      out.
+
+      Prose is optional. A local `llama.cpp` server (or Ollama) can write the
+      narrative sections, but it never supplies a number: every digit is traced
+      back to the scan or to a human-authored annotation. If a model invents one,
+      the section is rejected, retried once, and then dropped.
+
+      | Manual README pain | What this tool does |
+      |---|---|
+      | Numbers go stale | Embeds a facts hash; `check` fails on drift |
+      | Structure is reinvented per project | Five presets share one section graph |
+      | AI invents numbers | Every digit is traced to facts or `readme.yml` |
+      | Regeneration overwrites edits | `keep` blocks survive rebuilds |
+
+      Everything runs locally: `cargo test` plus `scripts/check.sh`. No hosted CI
+      is required.
+
+      The reference benchmark is a multi-gigabyte wallpaper archive with dozens
+      of folders and thousands of images. That README is excellent because it is
+      *specific*; this tool makes the specific parts reproducible and the
+      tasteful parts editable.
+      Start with [the architecture](docs/ARCHITECTURE.md),
+      [the configuration reference](docs/CONFIGURATION.md), and
+      [the benchmarks](docs/BENCHMARKS.md).
+    zh: |
+      README 会过期，原因很朴素：数字是手写的。首页写着「3,000 张图片」，写下的
+      那天是对的，三个月后就是错的；结构也会以同样的方式漂移。
+
+      这个工具把问题拆成三层。**事实**由仓库扫描得到——数量、体积、语言、目录、
+      依赖、git；**意义**放在可评审的 `readme.yml`；**渲染**是确定性的。于是重建
+      变得很无聊：同样的输入，产出逐字节一致。
+
+      散文是可选的。本地 `llama.cpp` 服务（或 Ollama）可以撰写叙事章节，但它不
+      提供任何数字：每个数字都能追溯到扫描结果或人工注解。模型若编造数字，该章节
+      会被拒绝、重试一次，然后丢弃。
+
+      | 手工 README 的痛点 | 这个工具的做法 |
+      |---|---|
+      | 数字会过期 | 写入事实 hash，`check` 在漂移时失败 |
+      | 每个项目重造结构 | 五个 preset 共用一张章节图 |
+      | 模型编造数字 | 每个数字都追溯到事实或 `readme.yml` |
+      | 重新生成覆盖手写内容 | `keep` 区块跨重建保留 |
+
+      一切都在本地完成：`cargo test` 与 `scripts/check.sh`，不依赖托管 CI。
+
+      参照样本是一份数 GiB、几十个目录、数千张图片的壁纸归档。那份 README 之所以
+      好，是因为它足够具体；这个工具让具体的部分可复现，让有品味的部分可编辑。可以
+      先读 [架构说明](docs/ARCHITECTURE.md)、[配置参考](docs/CONFIGURATION.md) 与
+      [性能基准](docs/BENCHMARKS.md)。
+  usage:
+    en: |
+      Scan first, then generate and validate:
+
+      ```bash
+      readme-gen scan --out .readme/facts.json
+      readme-gen init --preset showcase --lang en,zh
+      readme-gen build
+      readme-gen check --strict
+      ```
+
+      To let a local model write the prose sections:
+
+      ```bash
+      llama-server -m models/qwen3-8b.gguf --port 8080 -c 8192
+      readme-gen build --llm llama.cpp --model local
+      ```
+
+      `check` is the gate: it verifies links, anchors, markers, bilingual parity,
+      and that every number in the document exists in the facts or in this file.
+    zh: |
+      先扫描，再生成和校验：
+
+      ```bash
+      readme-gen scan --out .readme/facts.json
+      readme-gen init --preset showcase --lang en,zh
+      readme-gen build
+      readme-gen check --strict
+      ```
+
+      允许本地模型撰写散文：
+
+      ```bash
+      llama-server -m models/qwen3-8b.gguf --port 8080 -c 8192
+      readme-gen build --llm llama.cpp --model local
+      ```
+
+      `check` 是闸门：它检查链接、锚点、标记、双语对齐，以及文档里的每个数字
+      是否都存在于事实或本文件中。
+
+changelog:
+  - date: "2026-10-21"
+    text:
+      en: "Complete rewrite in Rust: deterministic facts, section presets, validator, keep blocks, and optional llama.cpp prose. The Python and Bash implementations moved to legacy/."
+      zh: "用 Rust 完整重写：事实扫描、章节预设、校验器、keep 区块，以及可选的 llama.cpp 散文生成。Python 与 Bash 实现移入 legacy/。"

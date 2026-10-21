@@ -1,0 +1,11 @@
+# Normalise every text file to LF in the repository and in the working tree.
+# This keeps macOS/Linux/Windows checkouts identical and avoids CRLF churn.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.heic binary
+*.pdf binary

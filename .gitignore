@@ -1,0 +1,10 @@
+/target
+/.readme/
+*.tmp
+.DS_Store
+Thumbs.db
+
+# legacy python implementation
+legacy/**/__pycache__
+legacy/**/.venv
+legacy/**/.pytest_cache

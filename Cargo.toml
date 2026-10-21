@@ -1,0 +1,27 @@
+[package]
+name = "readme-gen"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["Silverhand Miles"]
+description = "Generate verifiable README files from repository facts"
+license = "MIT"
+repository = "https://github.com/TheRealMilesLee/Auto-Generate-Readme"
+readme = "README.md"
+keywords = ["readme", "documentation", "generator", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "readme_gen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "readme-gen"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "none"
