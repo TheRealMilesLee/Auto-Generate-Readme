@@ -140,16 +140,31 @@ fn path_match(pattern: &[&str], text: &[&str]) -> bool {
 }
 
 fn wildcard_match(pattern: &[u8], text: &[u8]) -> bool {
-    match pattern.split_first() {
-        None => text.is_empty(),
-        Some((b'*', rest)) => {
-            wildcard_match(rest, text) || (!text.is_empty() && wildcard_match(pattern, &text[1..]))
-        }
-        Some((b'?', rest)) => !text.is_empty() && wildcard_match(rest, &text[1..]),
-        Some((byte, rest)) => {
-            !text.is_empty() && text[0] == *byte && wildcard_match(rest, &text[1..])
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let mut star_pi: Option<usize> = None;
+    let mut star_ti = 0usize;
+
+    while ti < text.len() {
+        if pi < pattern.len() && (pattern[pi] == b'?' || pattern[pi] == text[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < pattern.len() && pattern[pi] == b'*' {
+            star_pi = Some(pi);
+            star_ti = ti;
+            pi += 1;
+        } else if let Some(sp) = star_pi {
+            pi = sp + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
         }
     }
+
+    while pi < pattern.len() && pattern[pi] == b'*' {
+        pi += 1;
+    }
+    pi == pattern.len()
 }
 
 #[cfg(test)]
@@ -192,5 +207,12 @@ mod tests {
         let globs = set(&["*.log", "!important.log"]);
         assert!(globs.is_ignored("debug.log", false));
         assert!(!globs.is_ignored("important.log", false));
+    }
+
+    #[test]
+    fn repeated_wildcards_do_not_backtrack_exponentially() {
+        let globs = set(&["*a*a*a*a*a*b"]);
+        let long = format!("{}.txt", "a".repeat(80));
+        assert!(!globs.is_ignored(&long, false));
     }
 }

@@ -188,6 +188,11 @@ fn keeps_survive_rebuilds() {
 
     assert!(second.contains("Hand-written usage."));
     assert!(second.contains("<!-- readme-gen:keep:en:usage:start -->"));
+    assert_eq!(
+        second.matches("## Usage").count(),
+        1,
+        "keep block heading must not be duplicated:\n{second}"
+    );
 }
 
 #[test]
@@ -268,4 +273,130 @@ fn binary_build_and_check_work_together() {
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
     );
+}
+
+#[test]
+fn bilingual_headings_have_no_level_jumps() {
+    let dir = fixture("bilingual-headings");
+    let facts = scan::scan(&options(dir.path())).unwrap();
+    let mut config = Config::default();
+    config
+        .sections
+        .insert("why".to_string(), Loc::both("Clear reason.", "原因清晰。"));
+    let locales = vec![Lang::En, Lang::Zh];
+
+    let text = render::build(&Ctx {
+        facts: &facts,
+        config: &config,
+        generated: &Default::default(),
+        keeps: &Default::default(),
+        locales: &locales,
+        preset: readme_gen::outline::Preset::Cli,
+        version: "0.1.0",
+    });
+
+    assert!(text.contains("## English"));
+    assert!(text.contains("### Quick start"));
+    assert!(text.contains("## 中文"));
+    assert!(text.contains("### 快速开始"));
+
+    let report = validate::validate(&text, &facts, &config, &locales, &dir.path().join("README.md"));
+    assert!(report.is_ok(), "{:?}", report.errors);
+    assert!(
+        report.warnings.is_empty(),
+        "unexpected warnings: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
+fn check_detects_config_drift() {
+    let dir = fixture("config-drift");
+    let facts = scan::scan(&options(dir.path())).unwrap();
+    let mut config = Config::default();
+    config.project.tagline = Loc::en("First tagline.");
+
+    let text = render::build(&Ctx {
+        facts: &facts,
+        config: &config,
+        generated: &Default::default(),
+        keeps: &Default::default(),
+        locales: &[Lang::En],
+        preset: readme_gen::outline::Preset::Cli,
+        version: "0.1.0",
+    });
+
+    config.project.tagline = Loc::en("Edited tagline.");
+    let report = validate::validate(
+        &text,
+        &facts,
+        &config,
+        &[Lang::En],
+        &dir.path().join("README.md"),
+    );
+    assert!(!report.is_ok());
+    assert!(report.errors.iter().any(|e| e.contains("config hash")));
+}
+
+#[test]
+fn showcase_features_and_multiplication_resolution_validate() {
+    use readme_gen::annotations::{Announcement, CatalogGroup, DirAnn, SetupEntry, ToolEntry};
+    let dir = fixture("showcase-rich");
+    for folder in ["alpha", "beta", "gamma", "delta"] {
+        dir.write(&format!("{folder}/pic.jpg"), &[0u8; 1024]);
+    }
+    let facts = scan::scan(&options(dir.path())).unwrap();
+    let mut config = Config::default();
+    config.preset = Some(readme_gen::outline::Preset::Showcase);
+    config.locales = vec![Lang::En];
+    config.announcements.push(Announcement {
+        kind: "IMPORTANT".to_string(),
+        date: Some("2026-11-20".to_string()),
+        text: Loc::en("All cuts include 3840×2160."),
+    });
+    config.catalog_groups.push(CatalogGroup {
+        name: Loc::en("Primary"),
+        dirs: vec!["alpha".to_string(), "beta".to_string()],
+    });
+    config.dirs.insert(
+        "alpha".to_string(),
+        DirAnn {
+            summary: Loc::en("Lead shelf in 3840×2160."),
+            bullets: vec![],
+            tags: vec![],
+        },
+    );
+    config.setup.push(SetupEntry {
+        target: Loc::en("4K"),
+        recommend: Loc::en("Start with `alpha`"),
+    });
+    config.tooling.push(ToolEntry {
+        command: "scripts/check.sh".to_string(),
+        note: Loc::en("Run local validation"),
+    });
+
+    let text = render::build(&Ctx {
+        facts: &facts,
+        config: &config,
+        generated: &Default::default(),
+        keeps: &Default::default(),
+        locales: &[Lang::En],
+        preset: readme_gen::outline::Preset::Showcase,
+        version: "0.1.0",
+    });
+
+    assert!(text.contains("> [!IMPORTANT]"));
+    assert!(text.contains("### Primary"));
+    assert!(text.contains("## Pick your setup"));
+    assert!(text.contains("## Tooling"));
+
+    let report = validate::validate(
+        &text,
+        &facts,
+        &config,
+        &[Lang::En],
+        &dir.path().join("README.md"),
+    );
+    assert!(report.is_ok(), "{:?}", report.errors);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }

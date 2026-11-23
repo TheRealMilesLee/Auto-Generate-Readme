@@ -45,17 +45,24 @@ readme-gen check --strict  # CI-friendly validation
 | `preset` | string | `library`, `cli`, `app`, `dataset`, `showcase`. Defaults to the detected project kind. |
 | `locale` | list | `[en]`, `[zh]`, or `[en, zh]` for a split bilingual document. |
 | `project` | map | Name, tagline, description, author, licence override. |
+| `nav` | list | Extra quick-jump links (`label`, `href`) in the top navigation bar. |
+| `announcements` | list | GitHub alert callouts (`kind`, `date`, `text`) shown above the content. |
 | `quickstart` | map | Clone URL and "starter pack" shortcuts (showcase). |
+| `numbers.extra` | list | Extra curated rows (`label`, `value`) appended to `By the numbers`. |
 | `dirs` | map | Per-folder summaries and bullets (dataset/showcase catalogue). |
 | `sections` | map | Hand-written prose for `why`, `audience`, `usage`, `philosophy`. |
+| `setup` | list | Scenario/device recommendation table (`target`, `recommend`). |
+| `tooling` | list | Helper scripts / CLI table (`command`, `note`). |
 | `sources` | list | Source/provenance table. |
 | `compatibility` | list | Format compatibility table. |
 | `awards` | list | "Trophy case" highlights. |
-| `changelog` | list | Hand-curated update log (falls back to recent commits). |
-| `cta` | map | Star/fork call to action text and toggles. |
+| `changelog` | list | Hand-curated update log (falls back to recent commits on dataset/showcase). |
+| `cta` | map | Star/fork call to action (`top`, `star`, `fork`, `text`). |
 | `catalog.order` | list | Preferred folder order for the catalogue. |
+| `catalog.groups` | list | Named folder groups (`name`, `dirs`) for the catalog overview table. |
 | `exclude` | list | Extra gitignore-style patterns for the scanner. |
 | `badges.style` | string | Shields.io style (`flat`, `for-the-badge`, …). |
+| `badges.links` | bool | Wrap GitHub/license badges in clickable links (default `true`). |
 | `credit` | bool | Append the generator credit line (default `true`). |
 | `llm` | map | Default endpoint/model/temperature for prose generation. |
 
@@ -137,7 +144,7 @@ sections:
     Optional: overrides the generated `--help` snippet.
 ```
 
-`why` is used by `library`, `cli` and `showcase`; `audience` by `showcase`.
+`why` is used by `library`, `cli`, `app` and `showcase`; `audience` by `showcase`.
 When a section is empty and `--llm` is enabled, the model fills it. When both are
 absent, the section is omitted — never filled with placeholder text.
 
@@ -185,20 +192,24 @@ cta:
 | `quickstart` | – | ✓ | ✓ | ✓ | ✓ |
 | `packs` | – | – | – | – | ✓ |
 | `numbers` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `why` | ✓ | – | – | – | ✓ |
+| `why` | ✓ | ✓ | ✓ | – | ✓ |
 | `audience` | – | – | – | – | ✓ |
 | `catalog` | – | – | – | ✓ | ✓ |
 | `structure` | ✓ | ✓ | ✓ | ✓ | – |
+| `setup` | – | – | – | ✓ | ✓ |
+| `tooling` | – | ✓ | ✓ | ✓ | ✓ |
 | `install` | ✓ | ✓ | ✓ | – | – |
 | `usage` | ✓ | ✓ | ✓ | – | – |
 | `deps` | ✓ | ✓ | ✓ | – | – |
 | `sources` | – | – | – | ✓ | ✓ |
 | `compatibility` | – | – | – | – | ✓ |
 | `awards` | – | – | – | – | ✓ |
+| `contributing` | ✓ | ✓ | – | – | – |
 | `license` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `contributing` | ✓ | ✓ | ✓ | – | – |
-| `changelog` | – | – | – | ✓ | ✓ |
-| `cta` | – | – | – | – | ✓ |
+| `changelog` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `cta` | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Note: `tooling`, `setup`, `numbers.extra`, `announcements`, and `cta` (outside `showcase`) are opt-in and only appear when configured in `readme.yml`. On `library`/`cli`/`app`, `changelog` renders only when `changelog:` is defined in `readme.yml`.
 
 Inspect the exact order with:
 
@@ -221,7 +232,7 @@ This paragraph is written by a human and survives every rebuild.
 ```
 
 - `{lang}` is `en` or `zh`; `{id}` is the section id (`usage`, `why`, …).
-- The block replaces that section for that language only.
+- The block replaces that section for that language only. If the `keep` block already starts with its own Markdown heading (`## Usage` or `### Usage`), `readme-gen` will not emit a duplicate heading above it.
 - `check` fails on unclosed or mismatched keep blocks.
 - In a two-locale document, a prose section must be filled for **both**
   languages (or omitted from both); otherwise the bilingual parity check fails.

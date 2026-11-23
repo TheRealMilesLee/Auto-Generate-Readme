@@ -159,14 +159,34 @@ pub fn to_slash(path: &Path) -> String {
     text.replace('\\', "/")
 }
 
-/// Normalise a relative path string: strip `./`, convert backslashes.
+/// Normalise a relative path string: convert backslashes, strip `./`, trim `/`.
 pub fn normalize_rel(value: &str) -> String {
-    value
-        .trim()
-        .trim_start_matches("./")
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_string()
+    let mut text = value.trim().replace('\\', "/");
+    while let Some(rest) = text.strip_prefix("./") {
+        text = rest.to_string();
+    }
+    text.trim_end_matches('/').to_string()
+}
+
+/// Lexically clean a path by resolving `.` and `..` components without
+/// touching the filesystem.
+pub fn clean_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else {
+                    out.push(component);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Truncate on a character boundary and append an ellipsis.
@@ -249,6 +269,11 @@ mod tests {
     #[test]
     fn relative_paths_use_forward_slashes() {
         assert_eq!(normalize_rel("./a\\b/"), "a/b");
+        assert_eq!(normalize_rel(".\\a\\b/"), "a/b");
         assert_eq!(to_slash(Path::new("a/b")), "a/b");
+        assert_eq!(
+            clean_path(Path::new("/tmp/repo/./sub/../README.md")),
+            PathBuf::from("/tmp/repo/README.md")
+        );
     }
 }

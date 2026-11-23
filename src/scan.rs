@@ -213,7 +213,7 @@ pub fn scan(options: &ScanOptions) -> Result<Facts> {
     let globs = GlobSet::new(excludes);
 
     let mut walker = Walker::new(options, globs.clone());
-    walker.walk(&root, "", 0)?;
+    let tree_node = walker.walk(&root, "", 0)?;
 
     let mut dirs: Vec<DirStats> = walker
         .agg
@@ -241,8 +241,7 @@ pub fn scan(options: &ScanOptions) -> Result<Facts> {
     let mut counts = walker.counts;
     counts.top_dirs = dirs.len() as u64;
 
-    let tree = build_tree(&root, "", 0, options, &globs)?
-        .render();
+    let tree = tree_node.render();
 
     let tests = if walker.test_files > 0 {
         Some(TestInfo {
@@ -253,7 +252,7 @@ pub fn scan(options: &ScanOptions) -> Result<Facts> {
         None
     };
 
-    let kind = detect_kind(&root, &counts, &walker.entrypoints);
+    let kind = detect_kind(&root, &counts, &walker.entrypoints, &languages);
 
     let mut facts = Facts {
         root,
@@ -317,40 +316,69 @@ impl<'a> Walker<'a> {
         }
     }
 
-    fn walk(&mut self, dir: &Path, rel: &str, depth: usize) -> Result<()> {
+    fn walk(&mut self, dir: &Path, rel: &str, depth: usize) -> Result<TreeNode> {
+        let dir_name = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "project".to_string());
+        let mut node = TreeNode {
+            name: dir_name,
+            is_dir: true,
+            children: Vec::new(),
+            more: 0,
+        };
         if depth > self.options.max_depth {
-            return Ok(());
+            return Ok(node);
         }
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(error) => {
                 self.warnings
                     .push(format!("cannot read {}: {error}", dir.display()));
-                return Ok(());
+                return Ok(node);
             }
         };
-        let mut entries: Vec<_> = entries.filter_map(|entry| entry.ok()).collect();
-        entries.sort_by_key(|entry| entry.file_name());
 
-        for entry in entries {
+        let mut items: Vec<(PathBuf, String, fs::Metadata)> = Vec::new();
+        for entry in entries.filter_map(|entry| entry.ok()) {
             let name = entry.file_name().to_string_lossy().to_string();
-            let child_rel = if rel.is_empty() {
-                name.clone()
-            } else {
-                format!("{rel}/{name}")
-            };
-            let metadata = match fs::symlink_metadata(entry.path()) {
+            let path = entry.path();
+            let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(error) => {
+                    let child_rel = if rel.is_empty() {
+                        name
+                    } else {
+                        format!("{rel}/{name}")
+                    };
                     self.warnings
                         .push(format!("cannot stat {}: {error}", child_rel));
                     continue;
                 }
             };
-
             if metadata.file_type().is_symlink() {
                 continue;
             }
+            items.push((path, name, metadata));
+        }
+        items.sort_by(|a, b| {
+            let a_dir = if a.2.is_dir() { 0u8 } else { 1u8 };
+            let b_dir = if b.2.is_dir() { 0u8 } else { 1u8 };
+            a_dir
+                .cmp(&b_dir)
+                .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+                .then_with(|| a.1.cmp(&b.1))
+        });
+
+        let build_tree_children = depth < self.options.tree_depth;
+
+        for (path, name, metadata) in items {
+            let child_rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+
             if depth == 0 && metadata.is_file() && is_readme_file(&name) {
                 continue;
             }
@@ -377,7 +405,14 @@ impl<'a> Walker<'a> {
                         self.test_dirs.push(child_rel.clone());
                     }
                 }
-                self.walk(&entry.path(), &child_rel, depth + 1)?;
+                let child_node = self.walk(&path, &child_rel, depth + 1)?;
+                if build_tree_children {
+                    if node.children.len() < 40 {
+                        node.children.push(child_node);
+                    } else {
+                        node.more += 1;
+                    }
+                }
             } else if metadata.is_file() {
                 if self.globs.is_ignored(&child_rel, false) {
                     continue;
@@ -392,8 +427,7 @@ impl<'a> Walker<'a> {
                 let bytes = metadata.len();
                 self.sizes.total_bytes += bytes;
 
-                let ext = entry
-                    .path()
+                let ext = path
                     .extension()
                     .map(|ext| ext.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
@@ -424,9 +458,22 @@ impl<'a> Walker<'a> {
                 {
                     self.test_files += 1;
                 }
+
+                if build_tree_children {
+                    if node.children.len() < 40 {
+                        node.children.push(TreeNode {
+                            name,
+                            is_dir: false,
+                            children: Vec::new(),
+                            more: 0,
+                        });
+                    } else {
+                        node.more += 1;
+                    }
+                }
             }
         }
-        Ok(())
+        Ok(node)
     }
 
     fn add_to_dirs(&mut self, parent_rel: &str, bytes: u64, image: bool, video: bool, ext: &str) {
@@ -528,87 +575,6 @@ fn language_for(ext: &str) -> Option<&'static str> {
         _ => return None,
     };
     Some(language)
-}
-
-fn build_tree(
-    dir: &Path,
-    rel: &str,
-    depth: usize,
-    options: &ScanOptions,
-    globs: &GlobSet,
-) -> Result<TreeNode> {
-    let mut node = TreeNode {
-        name: if depth == 0 {
-            dir.file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "project".to_string())
-        } else {
-            dir.file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_default()
-        },
-        is_dir: true,
-        children: Vec::new(),
-        more: 0,
-    };
-    if depth >= options.tree_depth {
-        return Ok(node);
-    }
-
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return Ok(node),
-    };
-    let mut entries: Vec<_> = entries.filter_map(|entry| entry.ok()).collect();
-    entries.sort_by_key(|entry| {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-        (if is_dir { 0 } else { 1 }, name.to_lowercase())
-    });
-
-    for entry in entries {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let child_rel = if rel.is_empty() {
-            name.clone()
-        } else {
-            format!("{rel}/{name}")
-        };
-        let metadata = match fs::symlink_metadata(entry.path()) {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
-        if metadata.file_type().is_symlink() {
-            continue;
-        }
-        let is_dir = metadata.is_dir();
-        if depth == 0 && !is_dir && is_readme_file(&name) {
-            continue;
-        }
-        if globs.is_ignored(&child_rel, is_dir) {
-            continue;
-        }
-        if node.children.len() >= 40 {
-            node.more += 1;
-            continue;
-        }
-        if is_dir {
-            node.children.push(build_tree(
-                &entry.path(),
-                &child_rel,
-                depth + 1,
-                options,
-                globs,
-            )?);
-        } else {
-            node.children.push(TreeNode {
-                name,
-                is_dir: false,
-                children: Vec::new(),
-                more: 0,
-            });
-        }
-    }
-    Ok(node)
 }
 
 impl TreeNode {
@@ -730,8 +696,31 @@ fn read_pyproject_field(root: &Path, key: &str) -> Option<String> {
     None
 }
 
+fn strip_toml_comment(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, ch) in line.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' && q == '"' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '#' => return &line[..index],
+            _ => {}
+        }
+    }
+    line
+}
+
 fn inline_value(line: &str, key: &str) -> Option<String> {
-    let line = line.split('#').next().unwrap_or(line).trim();
+    let line = strip_toml_comment(line).trim();
     let rest = line.strip_prefix(key)?.trim_start();
     let rest = rest.strip_prefix('=')?.trim();
     let value = rest.trim().trim_matches(|c| c == '"' || c == '\'');
@@ -747,22 +736,48 @@ fn detect_license(root: &Path) -> (Option<String>, Option<String>) {
         Ok(entries) => entries,
         Err(_) => return (None, None),
     };
-    for entry in entries.filter_map(|entry| entry.ok()) {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let lower = name.to_lowercase();
-        if !(lower.starts_with("license") || lower.starts_with("copying")) {
-            continue;
-        }
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
+    let mut candidates: Vec<(String, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lower = name.to_lowercase();
+            if (lower.starts_with("license") || lower.starts_with("copying"))
+                && entry.path().is_file()
+            {
+                Some((name, entry.path()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    candidates.sort_by(|a, b| {
+        let rank = |name: &str| match name.to_lowercase().as_str() {
+            "license" => 0,
+            "license.md" | "license.txt" => 1,
+            "copying" => 2,
+            _ => 3,
+        };
+        rank(&a.0).cmp(&rank(&b.0)).then(a.0.cmp(&b.0))
+    });
+
+    for (name, path) in candidates {
         let content = read_text_lossy(&path).unwrap_or_default();
         let head: String = content.chars().take(8000).collect::<String>().to_lowercase();
-        let detected = if head.contains("mit license") {
+        let detected = if head.contains("mit license")
+            || (head.contains("permission is hereby granted, free of charge")
+                && head.contains("without restriction"))
+        {
             "MIT"
         } else if head.contains("apache license") {
             "Apache-2.0"
+        } else if head.contains("gnu affero general public license") {
+            "AGPL-3.0"
+        } else if head.contains("gnu lesser general public license") {
+            if head.contains("version 3") {
+                "LGPL-3.0"
+            } else {
+                "LGPL-2.1"
+            }
         } else if head.contains("gnu general public license") {
             if head.contains("version 3") {
                 "GPL-3.0"
@@ -771,12 +786,19 @@ fn detect_license(root: &Path) -> (Option<String>, Option<String>) {
             }
         } else if head.contains("mozilla public license") {
             "MPL-2.0"
-        } else if head.contains("bsd 3-clause") || head.contains("redistribution and use") && head.contains("neither the name") {
+        } else if head.contains("bsd 3-clause")
+            || (head.contains("redistribution and use") && head.contains("neither the name"))
+        {
             "BSD-3-Clause"
         } else if head.contains("bsd") {
             "BSD"
+        } else if head.contains("permission to use, copy, modify, and/or distribute this software")
+        {
+            "ISC"
         } else if head.contains("unlicense") {
             "Unlicense"
+        } else if head.contains("creative commons") {
+            "CC"
         } else {
             return (None, Some(name));
         };
@@ -894,8 +916,14 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
-fn detect_kind(root: &Path, counts: &Counts, entrypoints: &[String]) -> ProjectKind {
-    if counts.images > 100 && counts.images * 2 > counts.files {
+fn detect_kind(
+    root: &Path,
+    counts: &Counts,
+    entrypoints: &[String],
+    languages: &[LanguageStat],
+) -> ProjectKind {
+    let media = counts.images + counts.videos;
+    if (media > 100 && media * 2 > counts.files) || (counts.files > 50 && languages.is_empty()) {
         return ProjectKind::Dataset;
     }
     if root.join("src/main.rs").exists() || root.join("src/lib.rs").exists() {
@@ -920,11 +948,20 @@ fn detect_kind(root: &Path, counts: &Counts, entrypoints: &[String]) -> ProjectK
                 if value.get("bin").is_some() {
                     return ProjectKind::Cli;
                 }
+                if value.get("main").is_some()
+                    || value.get("module").is_some()
+                    || value.get("exports").is_some()
+                {
+                    return ProjectKind::Library;
+                }
             }
         }
     }
     if !entrypoints.is_empty() {
         return ProjectKind::Cli;
+    }
+    if root.join("pyproject.toml").exists() || root.join("go.mod").exists() {
+        return ProjectKind::Library;
     }
     ProjectKind::App
 }
@@ -956,31 +993,56 @@ fn detect_dependencies(root: &Path) -> Vec<Dependency> {
 
     if let Ok(text) = fs::read_to_string(root.join("Cargo.toml")) {
         let mut in_deps = false;
+        let mut subtable_dep: Option<String> = None;
         for line in text.lines() {
-            let line = line.trim();
+            let line = strip_toml_comment(line).trim();
             if line.starts_with('[') {
+                subtable_dep = None;
                 in_deps = matches!(
                     line,
                     "[dependencies]" | "[dev-dependencies]" | "[build-dependencies]"
                 );
+                if !in_deps {
+                    for prefix in ["[dependencies.", "[dev-dependencies.", "[build-dependencies."] {
+                        if let Some(rest) = line.strip_prefix(prefix) {
+                            if let Some(name) = rest.strip_suffix(']') {
+                                subtable_dep = Some(name.trim().to_string());
+                            }
+                            break;
+                        }
+                    }
+                }
                 continue;
             }
-            if !in_deps || line.is_empty() || line.starts_with('#') {
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(dep_name) = &subtable_dep {
+                if let Some(version) = inline_value(line, "version") {
+                    push(dep_name.clone(), version, "rust");
+                    subtable_dep = None;
+                }
+                continue;
+            }
+            if !in_deps {
                 continue;
             }
             if let Some((key, value)) = line.split_once('=') {
-                push(
-                    key.trim().to_string(),
-                    value.trim().trim_matches(|c| c == '"' || c == '\'').to_string(),
-                    "rust",
-                );
+                let spec = if value.trim().starts_with('{') {
+                    extract_inline_table_version(value).unwrap_or_else(|| {
+                        value.trim().trim_matches(|c| c == '"' || c == '\'').to_string()
+                    })
+                } else {
+                    value.trim().trim_matches(|c| c == '"' || c == '\'').to_string()
+                };
+                push(key.trim().to_string(), spec, "rust");
             }
         }
     }
 
     if let Ok(text) = fs::read_to_string(root.join("package.json")) {
         if let Ok(value) = crate::json::parse(&text) {
-            for key in ["dependencies", "devDependencies"] {
+            for key in ["dependencies", "devDependencies", "peerDependencies"] {
                 if let Some(Json::Obj(entries)) = value.get(key) {
                     for (name, spec) in entries {
                         push(
@@ -997,7 +1059,7 @@ fn detect_dependencies(root: &Path) -> Vec<Dependency> {
     if let Ok(text) = fs::read_to_string(root.join("pyproject.toml")) {
         let mut in_dependencies = false;
         for line in text.lines() {
-            let line = line.trim();
+            let line = strip_toml_comment(line).trim();
             if line.starts_with("dependencies") && line.contains('[') {
                 in_dependencies = true;
             }
@@ -1007,8 +1069,10 @@ fn detect_dependencies(root: &Path) -> Vec<Dependency> {
                     while let Some(start) = rest.find(quote) {
                         let after = &rest[start + 1..];
                         if let Some(end) = after.find(quote) {
-                            let value = &after[..end];
-                            if !value.is_empty() && !value.contains(' ') {
+                            let value = after[..end].trim();
+                            if !value.is_empty()
+                                && value.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+                            {
                                 let (name, spec) = split_dependency(value);
                                 push(name, spec, "python");
                             }
@@ -1028,13 +1092,22 @@ fn detect_dependencies(root: &Path) -> Vec<Dependency> {
     if let Ok(text) = fs::read_to_string(root.join("go.mod")) {
         let mut in_block = false;
         for line in text.lines() {
-            let line = line.trim();
+            let line = line.split("//").next().unwrap_or("").trim();
             if line.starts_with("require (") {
                 in_block = true;
                 continue;
             }
             if in_block && line == ")" {
                 in_block = false;
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("require ") {
+                let mut parts = rest.split_whitespace();
+                if let (Some(name), Some(spec)) = (parts.next(), parts.next()) {
+                    if name != "(" {
+                        push(name.to_string(), spec.to_string(), "go");
+                    }
+                }
                 continue;
             }
             if in_block && !line.is_empty() {
@@ -1048,6 +1121,19 @@ fn detect_dependencies(root: &Path) -> Vec<Dependency> {
 
     deps.truncate(40);
     deps
+}
+
+fn extract_inline_table_version(raw: &str) -> Option<String> {
+    let idx = raw.find("version")?;
+    let rest = raw[idx + "version".len()..].trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let after = &rest[1..];
+    let end = after.find(quote)?;
+    Some(after[..end].to_string())
 }
 
 fn split_dependency(line: &str) -> (String, String) {
@@ -1232,7 +1318,11 @@ impl Facts {
 
         let mut project = Json::obj();
         project.push("name", self.name.clone());
+        project.push("description", self.description.clone());
         project.push("kind", self.kind.as_str());
+        project.push("version", self.version.clone());
+        project.push("license", self.license.clone());
+        project.push("license_file", self.license_file.clone());
         root.push("project", project);
 
         let mut counts = Json::obj();
@@ -1244,12 +1334,15 @@ impl Facts {
         root.push("counts", counts);
 
         root.push("media_bytes", self.sizes.media_bytes);
+        root.push("image_bytes", self.sizes.image_bytes);
+        root.push("video_bytes", self.sizes.video_bytes);
 
         let mut languages = Json::arr();
         for language in &self.languages {
             let mut item = Json::obj();
             item.push("name", language.name);
             item.push("files", language.files);
+            item.push("bytes", language.bytes);
             languages.push_value(item);
         }
         root.push("languages", languages);
@@ -1268,7 +1361,7 @@ impl Facts {
 
         let mut deps = Json::arr();
         for dep in &self.deps {
-            deps.push_value(format!("{}:{}", dep.ecosystem, dep.name));
+            deps.push_value(format!("{}:{}={}", dep.ecosystem, dep.name, dep.spec));
         }
         root.push("deps", deps);
 
@@ -1277,6 +1370,18 @@ impl Facts {
             entrypoints.push_value(entry.clone());
         }
         root.push("entrypoints", entrypoints);
+
+        if let Some(tests) = &self.tests {
+            let mut t = Json::obj();
+            let mut td = Json::arr();
+            for d in &tests.dirs {
+                td.push_value(d.clone());
+            }
+            t.push("dirs", td);
+            t.push("files", tests.files);
+            root.push("tests", t);
+        }
+
         root.push("tree", self.tree.clone());
 
         sha256::hex_digest(root.to_compact().as_bytes())

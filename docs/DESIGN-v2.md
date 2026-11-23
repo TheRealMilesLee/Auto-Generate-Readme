@@ -391,10 +391,10 @@ README 头部写入：
 <!-- readme-gen:meta {"schema":"readme-facts/v1","facts":"sha256:ab12…","preset":"showcase","version":"2.0.0"} -->
 ```
 
-`check` 重新扫描并比对 hash。CI 里跑：
+`check` 重新扫描并比对 hash。在本地检查脚本里跑：
 
-```yaml
-- run: readme-gen check README.md --repo .
+```bash
+readme-gen check --root . --out README.md --strict
 ```
 
 统计变了但 README 没重生成 → CI 失败。这正好解决 3,079 → 3,087 的漂移。

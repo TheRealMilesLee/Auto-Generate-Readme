@@ -7,8 +7,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::error::{Error, Result};
+use crate::json::Json;
 use crate::lang::{Lang, Loc};
 use crate::outline::Preset;
+use crate::sha256;
 use crate::util::read_text;
 use crate::yaml::{self, Yaml};
 
@@ -68,9 +70,47 @@ pub struct ChangelogEntry {
 
 #[derive(Debug, Clone, Default)]
 pub struct CtaAnn {
+    pub top: Option<bool>,
     pub star: Option<bool>,
     pub fork: Option<bool>,
     pub text: Loc,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Announcement {
+    pub kind: String,
+    pub date: Option<String>,
+    pub text: Loc,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SetupEntry {
+    pub target: Loc,
+    pub recommend: Loc,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ToolEntry {
+    pub command: String,
+    pub note: Loc,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CatalogGroup {
+    pub name: Loc,
+    pub dirs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NavItem {
+    pub label: Loc,
+    pub href: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExtraNumber {
+    pub label: Loc,
+    pub value: Loc,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -85,17 +125,24 @@ pub struct Config {
     pub preset: Option<Preset>,
     pub locales: Vec<Lang>,
     pub project: ProjectAnn,
+    pub nav: Vec<NavItem>,
+    pub announcements: Vec<Announcement>,
     pub quickstart: QuickstartAnn,
+    pub numbers_extra: Vec<ExtraNumber>,
     pub dirs: BTreeMap<String, DirAnn>,
     pub sections: BTreeMap<String, Loc>,
+    pub setup: Vec<SetupEntry>,
+    pub tooling: Vec<ToolEntry>,
     pub sources: Vec<SourceAnn>,
     pub compatibility: Vec<CompatAnn>,
     pub awards: Vec<AwardAnn>,
     pub changelog: Vec<ChangelogEntry>,
     pub cta: CtaAnn,
     pub catalog_order: Vec<String>,
+    pub catalog_groups: Vec<CatalogGroup>,
     pub excludes: Vec<String>,
     pub badge_style: String,
+    pub badge_links: bool,
     pub credit: bool,
     pub llm: LlmAnn,
 }
@@ -106,17 +153,24 @@ impl Default for Config {
             preset: None,
             locales: Vec::new(),
             project: ProjectAnn::default(),
+            nav: Vec::new(),
+            announcements: Vec::new(),
             quickstart: QuickstartAnn::default(),
+            numbers_extra: Vec::new(),
             dirs: BTreeMap::new(),
             sections: BTreeMap::new(),
+            setup: Vec::new(),
+            tooling: Vec::new(),
             sources: Vec::new(),
             compatibility: Vec::new(),
             awards: Vec::new(),
             changelog: Vec::new(),
             cta: CtaAnn::default(),
             catalog_order: Vec::new(),
+            catalog_groups: Vec::new(),
             excludes: Vec::new(),
             badge_style: "flat".to_string(),
+            badge_links: true,
             credit: true,
             llm: LlmAnn::default(),
         }
@@ -303,10 +357,87 @@ impl Config {
 
         if let Some(cta) = value.get("cta") {
             config.cta = CtaAnn {
-                star: cta.get("star").and_then(|value| value.as_str()).map(|value| value != "false"),
-                fork: cta.get("fork").and_then(|value| value.as_str()).map(|value| value != "false"),
+                top: cta.get("top").and_then(parse_bool),
+                star: cta.get("star").and_then(parse_bool),
+                fork: cta.get("fork").and_then(parse_bool),
                 text: cta.get("text").map(Loc::from_yaml).unwrap_or_default(),
             };
+        }
+
+        if let Some(items) = value.get("nav") {
+            for item in items.as_list() {
+                let href = item
+                    .get("href")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let label = item.get("label").map(Loc::from_yaml).unwrap_or_default();
+                if !href.is_empty() && !label.is_empty() {
+                    config.nav.push(NavItem { label, href });
+                }
+            }
+        }
+
+        if let Some(items) = value.get("announcements") {
+            for item in items.as_list() {
+                let kind = item
+                    .get("kind")
+                    .or_else(|| item.get("type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("note")
+                    .trim()
+                    .to_uppercase();
+                let date = item
+                    .get("date")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let text = item.get("text").map(Loc::from_yaml).unwrap_or_default();
+                if !text.is_empty() {
+                    config.announcements.push(Announcement { kind, date, text });
+                }
+            }
+        }
+
+        if let Some(numbers) = value.get("numbers") {
+            for item in numbers.get("extra").map(|v| v.as_list()).unwrap_or(&[]) {
+                let label = item.get("label").map(Loc::from_yaml).unwrap_or_default();
+                let val = item.get("value").map(Loc::from_yaml).unwrap_or_default();
+                if !label.is_empty() && !val.is_empty() {
+                    config.numbers_extra.push(ExtraNumber { label, value: val });
+                }
+            }
+        }
+
+        if let Some(items) = value.get("setup") {
+            for item in items.as_list() {
+                let target = item.get("target").map(Loc::from_yaml).unwrap_or_default();
+                let recommend = item
+                    .get("recommend")
+                    .or_else(|| item.get("note"))
+                    .map(Loc::from_yaml)
+                    .unwrap_or_default();
+                if !target.is_empty() && !recommend.is_empty() {
+                    config.setup.push(SetupEntry { target, recommend });
+                }
+            }
+        }
+
+        if let Some(items) = value.get("tooling") {
+            for item in items.as_list() {
+                let command = item
+                    .get("command")
+                    .or_else(|| item.get("script"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let note = item.get("note").map(Loc::from_yaml).unwrap_or_default();
+                if !command.is_empty() {
+                    config.tooling.push(ToolEntry { command, note });
+                }
+            }
         }
 
         if let Some(catalog) = value.get("catalog") {
@@ -320,6 +451,25 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default();
+            for item in catalog
+                .get("groups")
+                .map(|v| v.as_list())
+                .unwrap_or(&[])
+            {
+                let name = item.get("name").map(Loc::from_yaml).unwrap_or_default();
+                let dirs: Vec<String> = item
+                    .get("dirs")
+                    .map(|v| {
+                        v.as_list()
+                            .iter()
+                            .filter_map(|d| d.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !name.is_empty() && !dirs.is_empty() {
+                    config.catalog_groups.push(CatalogGroup { name, dirs });
+                }
+            }
         }
 
         if let Some(excludes) = value.get("exclude").or_else(|| value.get("excludes")) {
@@ -334,10 +484,13 @@ impl Config {
             if let Some(style) = badges.get("style").and_then(|value| value.as_str()) {
                 config.badge_style = style.to_string();
             }
+            if let Some(links) = badges.get("links").and_then(parse_bool) {
+                config.badge_links = links;
+            }
         }
 
-        if let Some(credit) = value.get("credit").and_then(|value| value.as_str()) {
-            config.credit = credit != "false";
+        if let Some(credit) = value.get("credit").and_then(parse_bool) {
+            config.credit = credit;
         }
 
         if let Some(llm) = value.get("llm") {
@@ -355,6 +508,17 @@ impl Config {
         }
 
         Ok(config)
+    }
+}
+
+fn parse_bool(value: &Yaml) -> Option<bool> {
+    let raw = value.as_str()?.trim();
+    if raw.eq_ignore_ascii_case("false") || raw.eq_ignore_ascii_case("no") {
+        Some(false)
+    } else if raw.eq_ignore_ascii_case("true") || raw.eq_ignore_ascii_case("yes") {
+        Some(true)
+    } else {
+        None
     }
 }
 
@@ -540,7 +704,226 @@ impl Config {
             out.push('\n');
             push_loc(&mut out, &entry.text);
         }
+        for item in &self.nav {
+            push_loc(&mut out, &item.label);
+            out.push_str(&item.href);
+            out.push('\n');
+        }
+        for item in &self.announcements {
+            if let Some(date) = &item.date {
+                out.push_str(date);
+                out.push('\n');
+            }
+            push_loc(&mut out, &item.text);
+        }
+        for item in &self.numbers_extra {
+            push_loc(&mut out, &item.label);
+            push_loc(&mut out, &item.value);
+        }
+        for item in &self.setup {
+            push_loc(&mut out, &item.target);
+            push_loc(&mut out, &item.recommend);
+        }
+        for item in &self.tooling {
+            out.push_str(&item.command);
+            out.push('\n');
+            push_loc(&mut out, &item.note);
+        }
+        for group in &self.catalog_groups {
+            push_loc(&mut out, &group.name);
+        }
         push_loc(&mut out, &self.cta.text);
         out
+    }
+
+    /// Deterministic hash of configuration/annotations for cache invalidation and drift check.
+    pub fn content_hash(&self) -> String {
+        fn loc_json(loc: &Loc) -> Json {
+            let mut obj = Json::obj();
+            obj.push("en", loc.en.clone());
+            obj.push("zh", loc.zh.clone());
+            obj
+        }
+
+        let mut root = Json::obj();
+        root.push("preset", self.preset.map(|p| p.as_str().to_string()));
+        let mut locales = Json::arr();
+        for lang in &self.locales {
+            locales.push_value(lang.as_str());
+        }
+        root.push("locales", locales);
+
+        let mut project = Json::obj();
+        project.push("name", self.project.name.clone());
+        project.push("tagline", loc_json(&self.project.tagline));
+        project.push("description", loc_json(&self.project.description));
+        project.push("author", self.project.author.clone());
+        project.push("license", self.project.license.clone());
+        root.push("project", project);
+
+        let mut nav = Json::arr();
+        for item in &self.nav {
+            let mut n = Json::obj();
+            n.push("label", loc_json(&item.label));
+            n.push("href", item.href.clone());
+            nav.push_value(n);
+        }
+        root.push("nav", nav);
+
+        let mut announcements = Json::arr();
+        for item in &self.announcements {
+            let mut a = Json::obj();
+            a.push("kind", item.kind.clone());
+            a.push("date", item.date.clone());
+            a.push("text", loc_json(&item.text));
+            announcements.push_value(a);
+        }
+        root.push("announcements", announcements);
+
+        let mut quickstart = Json::obj();
+        quickstart.push("clone", self.quickstart.clone_url.clone());
+        let mut packs = Json::arr();
+        for p in &self.quickstart.packs {
+            let mut pj = Json::obj();
+            pj.push("name", loc_json(&p.name));
+            let mut dirs = Json::arr();
+            for d in &p.dirs {
+                dirs.push_value(d.clone());
+            }
+            pj.push("dirs", dirs);
+            pj.push("best_for", loc_json(&p.best_for));
+            packs.push_value(pj);
+        }
+        quickstart.push("packs", packs);
+        root.push("quickstart", quickstart);
+
+        let mut numbers_extra = Json::arr();
+        for item in &self.numbers_extra {
+            let mut n = Json::obj();
+            n.push("label", loc_json(&item.label));
+            n.push("value", loc_json(&item.value));
+            numbers_extra.push_value(n);
+        }
+        root.push("numbers_extra", numbers_extra);
+
+        let mut dirs = Json::arr();
+        for (name, dir) in &self.dirs {
+            let mut d = Json::obj();
+            d.push("name", name.clone());
+            d.push("summary", loc_json(&dir.summary));
+            let mut bullets = Json::arr();
+            for b in &dir.bullets {
+                bullets.push_value(loc_json(b));
+            }
+            d.push("bullets", bullets);
+            let mut tags = Json::arr();
+            for t in &dir.tags {
+                tags.push_value(t.clone());
+            }
+            d.push("tags", tags);
+            dirs.push_value(d);
+        }
+        root.push("dirs", dirs);
+
+        let mut sections = Json::arr();
+        for (name, loc) in &self.sections {
+            let mut s = Json::obj();
+            s.push("name", name.clone());
+            s.push("text", loc_json(loc));
+            sections.push_value(s);
+        }
+        root.push("sections", sections);
+
+        let mut setup = Json::arr();
+        for item in &self.setup {
+            let mut s = Json::obj();
+            s.push("target", loc_json(&item.target));
+            s.push("recommend", loc_json(&item.recommend));
+            setup.push_value(s);
+        }
+        root.push("setup", setup);
+
+        let mut tooling = Json::arr();
+        for item in &self.tooling {
+            let mut t = Json::obj();
+            t.push("command", item.command.clone());
+            t.push("note", loc_json(&item.note));
+            tooling.push_value(t);
+        }
+        root.push("tooling", tooling);
+
+        let mut sources = Json::arr();
+        for item in &self.sources {
+            let mut s = Json::obj();
+            s.push("name", item.name.clone());
+            s.push("url", item.url.clone());
+            s.push("note", loc_json(&item.note));
+            sources.push_value(s);
+        }
+        root.push("sources", sources);
+
+        let mut compat = Json::arr();
+        for item in &self.compatibility {
+            let mut c = Json::obj();
+            c.push("name", item.name.clone());
+            c.push("note", loc_json(&item.note));
+            compat.push_value(c);
+        }
+        root.push("compatibility", compat);
+
+        let mut awards = Json::arr();
+        for item in &self.awards {
+            let mut a = Json::obj();
+            a.push("award", loc_json(&item.award));
+            a.push("winner", item.winner.clone());
+            awards.push_value(a);
+        }
+        root.push("awards", awards);
+
+        let mut changelog = Json::arr();
+        for item in &self.changelog {
+            let mut c = Json::obj();
+            c.push("date", item.date.clone());
+            c.push("text", loc_json(&item.text));
+            changelog.push_value(c);
+        }
+        root.push("changelog", changelog);
+
+        let mut cta = Json::obj();
+        cta.push("top", self.cta.top);
+        cta.push("star", self.cta.star);
+        cta.push("fork", self.cta.fork);
+        cta.push("text", loc_json(&self.cta.text));
+        root.push("cta", cta);
+
+        let mut order = Json::arr();
+        for item in &self.catalog_order {
+            order.push_value(item.clone());
+        }
+        root.push("catalog_order", order);
+
+        let mut groups = Json::arr();
+        for group in &self.catalog_groups {
+            let mut g = Json::obj();
+            g.push("name", loc_json(&group.name));
+            let mut gd = Json::arr();
+            for d in &group.dirs {
+                gd.push_value(d.clone());
+            }
+            g.push("dirs", gd);
+            groups.push_value(g);
+        }
+        root.push("catalog_groups", groups);
+
+        let mut excludes = Json::arr();
+        for item in &self.excludes {
+            excludes.push_value(item.clone());
+        }
+        root.push("excludes", excludes);
+        root.push("badge_style", self.badge_style.clone());
+        root.push("badge_links", self.badge_links);
+        root.push("credit", self.credit);
+
+        sha256::hex_digest(root.to_compact().as_bytes())
     }
 }

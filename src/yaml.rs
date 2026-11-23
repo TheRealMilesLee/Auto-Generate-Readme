@@ -4,9 +4,10 @@
 //! - nested mappings and sequences (`- item`, `- key: value`)
 //! - quoted keys and values (single/double quotes, common escapes)
 //! - literal (`|`) and folded (`>`) block scalars with chomping indicators
-//! - flow sequences (`[en, zh]`), inline comments, blank lines
+//! - flow sequences (`[en, zh]`) and inline flow maps (`{ en: "a", zh: "b" }`)
+//! - inline comments and blank lines
 //!
-//! Not supported: anchors, aliases, tags, multi-document streams, flow maps.
+//! Not supported: anchors, aliases, tags, multi-document streams.
 //! Errors carry the 1-based line number.
 
 use crate::bail;
@@ -202,7 +203,10 @@ impl Parser {
                 break;
             }
             let number = line.number;
-            let rest = line.text[1..].trim_start().to_string();
+            let after_dash = &line.text[1..];
+            let trimmed_after_dash = after_dash.trim_start();
+            let spaces = after_dash.len() - trimmed_after_dash.len();
+            let rest = trimmed_after_dash.to_string();
             self.pos += 1;
 
             if rest.is_empty() {
@@ -224,7 +228,8 @@ impl Parser {
             }
 
             if split_key(&rest).is_some() {
-                items.push(self.parse_sequence_map_item(indent, &rest, number)?);
+                let item_indent = indent + 1 + spaces;
+                items.push(self.parse_sequence_map_item(item_indent, &rest, number)?);
             } else {
                 items.push(parse_scalar(&rest, number)?);
             }
@@ -234,11 +239,10 @@ impl Parser {
 
     fn parse_sequence_map_item(
         &mut self,
-        sequence_indent: usize,
+        item_indent: usize,
         first: &str,
         number: usize,
     ) -> Result<Yaml> {
-        let item_indent = sequence_indent + 2;
         let mut entries = Vec::new();
 
         let Some((key_raw, rest)) = split_key(first) else {
@@ -276,9 +280,11 @@ impl Parser {
         header: &str,
         number: usize,
     ) -> Result<Yaml> {
+        let header = strip_comment(header).trim();
         let folded = header.starts_with('>');
         let chomp = header.chars().last().unwrap_or(' ');
         let strip_trailing = chomp == '-';
+        let keep_trailing = chomp == '+';
 
         let start = self.pos;
         let mut end = start;
@@ -326,7 +332,11 @@ impl Parser {
         if strip_trailing {
             text = text.trim_end_matches('\n').to_string();
         }
-        let text = text.trim_end().to_string();
+        let text = if keep_trailing {
+            text
+        } else {
+            text.trim_end().to_string()
+        };
         let _ = number;
         Ok(Yaml::Str(text))
     }
@@ -428,6 +438,25 @@ fn parse_scalar(text: &str, number: usize) -> Result<Yaml> {
             items.push(parse_scalar(part.trim(), number)?);
         }
         return Ok(Yaml::List(items));
+    }
+    if let Some(inner) = trimmed.strip_prefix('{') {
+        let inner = inner
+            .strip_suffix('}')
+            .ok_or_else(|| Error::new(format!("readme.yml:{number}: unterminated flow mapping")))?;
+        let mut entries = Vec::new();
+        for part in split_flow(inner, ',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let Some((key_raw, val_raw)) = split_key(part) else {
+                bail!("readme.yml:{number}: expected 'key: value' inside flow mapping");
+            };
+            let key = parse_key(&key_raw, number)?;
+            let value = parse_scalar(val_raw.trim(), number)?;
+            entries.push((key, value));
+        }
+        return Ok(Yaml::Map(entries));
     }
     Ok(Yaml::Str(trimmed.to_string()))
 }
@@ -535,8 +564,8 @@ fn split_flow(text: &str, separator: char) -> Vec<&str> {
         }
         match ch {
             '"' | '\'' => quote = Some(ch),
-            '[' | '(' => depth += 1,
-            ']' | ')' => depth = depth.saturating_sub(1),
+            '[' | '{' | '(' => depth += 1,
+            ']' | '}' | ')' => depth = depth.saturating_sub(1),
             c if c == separator && depth == 0 => {
                 parts.push(&text[start..index]);
                 start = index + ch.len_utf8();
@@ -627,5 +656,31 @@ packs:
     #[test]
     fn rejects_tabs() {
         assert!(parse("a:\n\tb: 1\n").is_err());
+    }
+
+    #[test]
+    fn parses_flow_maps_and_custom_list_indent() {
+        let source = r#"
+packs:
+  -  name: { en: "New machine", zh: "新机器" }
+     dirs: ["2026 Wallpaper"]
+sections:
+  why: |- # strip trailing
+    Hello world.
+"#;
+        let value = parse(source).unwrap();
+        let packs = value.get("packs").unwrap().as_list();
+        assert_eq!(
+            packs[0].get("name").unwrap().get("zh").unwrap().as_str(),
+            Some("新机器")
+        );
+        assert_eq!(
+            packs[0].get("dirs").unwrap().as_list()[0].as_str(),
+            Some("2026 Wallpaper")
+        );
+        assert_eq!(
+            value.get("sections").unwrap().get("why").unwrap().as_str(),
+            Some("Hello world.")
+        );
     }
 }

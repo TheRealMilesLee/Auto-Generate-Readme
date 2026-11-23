@@ -5,7 +5,7 @@
 //! Renderers return `None` when there is not enough factual material, so a
 //! section disappears instead of being filled with placeholder text.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::annotations::Config;
 use crate::lang::Lang;
@@ -44,8 +44,21 @@ pub fn build(ctx: &Ctx<'_>) -> String {
         out.push('\n');
     }
 
-    if ctx.locales.len() > 1 {
-        out.push_str(&language_nav(ctx));
+    let top_cta = top_cta(ctx);
+    if !top_cta.is_empty() {
+        out.push_str(&top_cta);
+        out.push('\n');
+    }
+
+    let nav = language_nav(ctx);
+    if !nav.is_empty() {
+        out.push_str(&nav);
+        out.push('\n');
+    }
+
+    let alerts = announcements(ctx);
+    if !alerts.is_empty() {
+        out.push_str(&alerts);
         out.push('\n');
     }
 
@@ -72,6 +85,7 @@ fn meta_line(ctx: &Ctx<'_>) -> String {
     let mut meta = crate::json::Json::obj();
     meta.push("schema", 1u64);
     meta.push("facts", ctx.facts.hash.clone());
+    meta.push("config", ctx.config.content_hash());
     meta.push("preset", ctx.preset.as_str());
     let mut locales = crate::json::Json::arr();
     for lang in ctx.locales {
@@ -198,7 +212,7 @@ fn badges(ctx: &Ctx<'_>) -> String {
     } else {
         ctx.config.badge_style.as_str()
     };
-    let mut items: Vec<(String, String)> = Vec::new();
+    let mut items: Vec<(String, String, Option<String>)> = Vec::new();
 
     if facts.counts.images > 0 {
         items.push((
@@ -209,42 +223,66 @@ fn badges(ctx: &Ctx<'_>) -> String {
                 "blue",
                 style,
             ),
+            None,
         ));
     }
     if facts.sizes.media_bytes > 0 {
         items.push((
             "media".to_string(),
             badge("media", &facts.media_human(), "9b59b6", style),
+            None,
         ));
     }
     if let Some(language) = facts.languages.first() {
         items.push((
             language.name.to_string(),
             badge("language", language.name, "orange", style),
+            None,
         ));
     }
     if let Some(license) = &facts.license {
         items.push((
             "license".to_string(),
             badge("license", license, "green", style),
+            facts.license_file.clone(),
         ));
     }
     if let Some(version) = &facts.version {
         items.push((
             "version".to_string(),
             badge("version", version, "blueviolet", style),
+            None,
         ));
     }
     if let Some((owner, repo)) = facts.repo_slug() {
-        let base = format!("https://img.shields.io/github/stars/{owner}/{repo}");
+        let logo = if style == "for-the-badge" {
+            "&logo=github"
+        } else {
+            ""
+        };
+        let stars_url = format!(
+            "https://img.shields.io/github/stars/{owner}/{repo}?style={style}{logo}"
+        );
+        let forks_url = format!(
+            "https://img.shields.io/github/forks/{owner}/{repo}?style={style}{logo}"
+        );
         items.push((
             "stars".to_string(),
-            format!("{base}?style={style}"),
+            stars_url,
+            if ctx.config.badge_links {
+                Some(format!("https://github.com/{owner}/{repo}/stargazers"))
+            } else {
+                None
+            },
         ));
-        let base = format!("https://img.shields.io/github/forks/{owner}/{repo}");
         items.push((
             "forks".to_string(),
-            format!("{base}?style={style}"),
+            forks_url,
+            if ctx.config.badge_links {
+                Some(format!("https://github.com/{owner}/{repo}/network/members"))
+            } else {
+                None
+            },
         ));
     }
 
@@ -252,9 +290,43 @@ fn badges(ctx: &Ctx<'_>) -> String {
         return String::new();
     }
     let mut out = String::from("<p align=\"center\">\n");
-    for (alt, url) in items {
+    for (alt, url, link) in items {
+        let img = format!("<img src=\"{url}\" alt=\"{alt}\">");
+        match link {
+            Some(href) => out.push_str(&format!("  <a href=\"{href}\">{img}</a>\n")),
+            None => out.push_str(&format!("  {img}\n")),
+        }
+    }
+    out.push_str("</p>\n");
+    out
+}
+
+fn top_cta(ctx: &Ctx<'_>) -> String {
+    if ctx.config.cta.top != Some(true) {
+        return String::new();
+    }
+    let Some((owner, repo)) = ctx.facts.repo_slug() else {
+        return String::new();
+    };
+    let star = ctx.config.cta.star.unwrap_or(true);
+    let fork = ctx.config.cta.fork.unwrap_or(true);
+    if !star && !fork {
+        return String::new();
+    }
+    let style = if ctx.config.badge_style.is_empty() {
+        "for-the-badge"
+    } else {
+        ctx.config.badge_style.as_str()
+    };
+    let mut out = String::from("<p align=\"center\">\n");
+    if star {
         out.push_str(&format!(
-            "  <img src=\"{url}\" alt=\"{alt}\">\n"
+            "  <a href=\"https://github.com/{owner}/{repo}/stargazers\"><img src=\"https://img.shields.io/badge/⭐_Star_this_repo-ff4785?style={style}&logo=github\" alt=\"Star\"></a>\n"
+        ));
+    }
+    if fork {
+        out.push_str(&format!(
+            "  <a href=\"https://github.com/{owner}/{repo}/fork\"><img src=\"https://img.shields.io/badge/🍴_Fork_%26_own_it-24292f?style={style}&logo=github\" alt=\"Fork\"></a>\n"
         ));
     }
     out.push_str("</p>\n");
@@ -274,23 +346,112 @@ fn badge_escape(value: &str) -> String {
 
 fn language_nav(ctx: &Ctx<'_>) -> String {
     let mut links = Vec::new();
-    for lang in ctx.locales {
-        let anchor = match lang {
-            Lang::En => "english",
-            Lang::Zh => "chinese",
-        };
-        links.push(format!("<a href=\"#{anchor}\">{}</a>", lang.label()));
+    if ctx.locales.len() > 1 {
+        for lang in ctx.locales {
+            let anchor = match lang {
+                Lang::En => "english",
+                Lang::Zh => "chinese",
+            };
+            links.push(format!("<a href=\"#{anchor}\">{}</a>", lang.label()));
+        }
     }
-    format!("<p align=\"center\">{}</p>\n", links.join(" · "))
+    let primary = ctx.locales.first().copied().unwrap_or(Lang::En);
+    for item in &ctx.config.nav {
+        if let Some(label) = item.label.get_or_fallback(primary) {
+            links.push(format!(
+                "<a href=\"{}\">{}</a>",
+                escape_html(&item.href),
+                escape_html(label)
+            ));
+        }
+    }
+    if links.is_empty() {
+        String::new()
+    } else {
+        format!("<p align=\"center\">{}</p>\n", links.join(" · "))
+    }
+}
+
+fn announcements(ctx: &Ctx<'_>) -> String {
+    if ctx.config.announcements.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for item in &ctx.config.announcements {
+        let tag = match item.kind.as_str() {
+            "IMPORTANT" | "NOTE" | "TIP" | "WARNING" | "CAUTION" => item.kind.as_str(),
+            _ => "NOTE",
+        };
+        out.push_str(&format!("> [!{tag}]\n"));
+        let mut wrote_any = false;
+        for lang in ctx.locales {
+            if let Some(text) = item.text.get(*lang) {
+                if wrote_any {
+                    out.push_str(">\n");
+                }
+                let prefix = match &item.date {
+                    Some(date) => format!("**{date}** · "),
+                    None => String::new(),
+                };
+                for (line_idx, line) in text.trim().lines().enumerate() {
+                    if line_idx == 0 {
+                        out.push_str(&format!("> {prefix}{line}\n"));
+                    } else if line.trim().is_empty() {
+                        out.push_str(">\n");
+                    } else {
+                        out.push_str(&format!("> {line}\n"));
+                    }
+                }
+                wrote_any = true;
+            }
+        }
+        if !wrote_any {
+            if let Some(text) = item.text.get_or_fallback(Lang::En) {
+                let prefix = match &item.date {
+                    Some(date) => format!("**{date}** · "),
+                    None => String::new(),
+                };
+                for (line_idx, line) in text.trim().lines().enumerate() {
+                    if line_idx == 0 {
+                        out.push_str(&format!("> {prefix}{line}\n"));
+                    } else {
+                        out.push_str(&format!("> {line}\n"));
+                    }
+                }
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn section_heading_prefix(ctx: &Ctx<'_>) -> &'static str {
+    if ctx.locales.len() > 1 {
+        "###"
+    } else {
+        "##"
+    }
+}
+
+fn sub_heading_prefix(ctx: &Ctx<'_>) -> &'static str {
+    if ctx.locales.len() > 1 {
+        "####"
+    } else {
+        "###"
+    }
 }
 
 fn render_language(ctx: &Ctx<'_>, lang: Lang) -> String {
     let specs = outline::sections(ctx.preset);
     let mut rendered: Vec<Rendered> = Vec::new();
+    let mut consumed_keeps: HashSet<&str> = HashSet::new();
 
     for spec in specs.iter().filter(|spec| !spec.is_header()) {
         if spec.kind == SectionKind::Toc {
             continue;
+        }
+        if keep_body(ctx, lang, spec.id).is_some() {
+            consumed_keeps.insert(spec.id);
         }
         if let Some(body) = render_section(ctx, *spec, lang) {
             if !body.trim().is_empty() {
@@ -305,14 +466,13 @@ fn render_language(ctx: &Ctx<'_>, lang: Lang) -> String {
 
     let by_id: HashMap<&str, &Rendered> =
         rendered.iter().map(|item| (item.id, item)).collect();
+    let sec_prefix = section_heading_prefix(ctx);
 
     let mut out = String::new();
     for spec in specs.iter().filter(|spec| !spec.is_header()) {
         if spec.kind == SectionKind::Toc {
             if rendered.len() >= 2 {
-                let mut toc = String::from("## ");
-                toc.push_str(outline::title(spec.kind, lang));
-                toc.push_str("\n\n");
+                let mut toc = format!("{sec_prefix} {}\n\n", outline::title(spec.kind, lang));
                 for item in &rendered {
                     toc.push_str(&format!(
                         "- [{}](#{})\n",
@@ -329,23 +489,63 @@ fn render_language(ctx: &Ctx<'_>, lang: Lang) -> String {
         let Some(item) = by_id.get(spec.id) else {
             continue;
         };
-        out.push_str(&section_block(lang, spec, &item.body));
+        out.push_str(&section_block(ctx, lang, spec, &item.body));
+    }
+
+    // Preserve any hand-written keep blocks whose section id is outside the preset.
+    for ((keep_lang, keep_id), keep_text) in ctx.keeps {
+        if keep_lang == lang.as_str() && !consumed_keeps.contains(keep_id.as_str()) {
+            let trimmed = keep_text.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!(
+                    "<!-- readme-gen:section:{keep_lang}:{keep_id}:start -->\n\
+                     <!-- readme-gen:keep:{keep_lang}:{keep_id}:start -->\n\
+                     {trimmed}\n\
+                     <!-- readme-gen:keep:{keep_lang}:{keep_id}:end -->\n\
+                     <!-- readme-gen:section:{keep_lang}:{keep_id}:end -->\n\n"
+                ));
+            }
+        }
     }
 
     out
 }
 
-fn section_block(lang: Lang, spec: &SectionSpec, body: &str) -> String {
+fn keep_has_own_heading(wrapped_keep: &str) -> bool {
+    let mut lines = wrapped_keep.lines();
+    let _start = lines.next();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("<!-- readme-gen:keep:") {
+            break;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("<a ") {
+            continue;
+        }
+        return trimmed.starts_with('#');
+    }
+    false
+}
+
+fn section_block(ctx: &Ctx<'_>, lang: Lang, spec: &SectionSpec, body: &str) -> String {
     let scoped = lang.scoped_id(spec.id);
     let title = outline::title(spec.kind, lang);
+    let sec_prefix = section_heading_prefix(ctx);
     let mut out = String::new();
     out.push_str(&format!(
         "<!-- readme-gen:section:{}:{}:start -->\n",
         lang.as_str(),
         spec.id
     ));
-    out.push_str(&format!("<a id=\"{scoped}\"></a>\n"));
-    out.push_str(&format!("## {title}\n\n"));
+    let is_keep = body.trim_start().starts_with("<!-- readme-gen:keep:");
+    if is_keep && keep_has_own_heading(body) {
+        if !body.contains(&format!("id=\"{scoped}\"")) {
+            out.push_str(&format!("<a id=\"{scoped}\"></a>\n"));
+        }
+    } else {
+        out.push_str(&format!("<a id=\"{scoped}\"></a>\n"));
+        out.push_str(&format!("{sec_prefix} {title}\n\n"));
+    }
     out.push_str(body.trim());
     out.push_str(&format!(
         "\n<!-- readme-gen:section:{}:{}:end -->\n\n",
@@ -373,12 +573,14 @@ fn render_section(ctx: &Ctx<'_>, spec: SectionSpec, lang: Lang) -> Option<String
         ));
     }
     match spec.kind {
-        SectionKind::Hero | SectionKind::Badges | SectionKind::Languages | SectionKind::Toc => None,
+        SectionKind::Hero | SectionKind::Badges | SectionKind::Toc => None,
         SectionKind::Quickstart => Some(quickstart(ctx, lang)),
         SectionKind::Packs => packs(ctx, lang),
         SectionKind::Numbers => numbers(ctx, lang),
         SectionKind::Catalog => catalog(ctx, lang),
         SectionKind::Structure => structure(ctx),
+        SectionKind::Setup => setup(ctx, lang),
+        SectionKind::Tooling => tooling(ctx, lang),
         SectionKind::Install => install(ctx, lang),
         SectionKind::Usage => usage(ctx, lang),
         SectionKind::Deps => deps(ctx, lang),
@@ -570,6 +772,23 @@ fn numbers(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
             format_count(tests.files),
         ));
     }
+    for extra in &ctx.config.numbers_extra {
+        let label = extra
+            .label
+            .get(lang)
+            .or_else(|| extra.label.get_or_fallback(lang))
+            .unwrap_or("")
+            .to_string();
+        let value = extra
+            .value
+            .get(lang)
+            .or_else(|| extra.value.get_or_fallback(lang))
+            .unwrap_or("")
+            .to_string();
+        if !label.is_empty() && !value.is_empty() {
+            rows.push((label, value));
+        }
+    }
 
     if rows.is_empty() {
         return None;
@@ -598,15 +817,70 @@ fn catalog(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
             .unwrap_or(usize::MAX)
     });
 
+    let sub_prefix = sub_heading_prefix(ctx);
     let mut out = String::new();
+
+    if dirs.len() >= 4 {
+        if ctx.config.catalog_groups.is_empty() {
+            out.push_str(&catalog_table(ctx, &dirs, lang));
+            out.push('\n');
+        } else {
+            let by_path: HashMap<&str, &crate::scan::DirStats> =
+                dirs.iter().map(|d| (d.path.as_str(), *d)).collect();
+            let mut grouped_paths: HashSet<&str> = HashSet::new();
+            for group in &ctx.config.catalog_groups {
+                let group_dirs: Vec<&crate::scan::DirStats> = group
+                    .dirs
+                    .iter()
+                    .filter_map(|name| by_path.get(name.as_str()).copied())
+                    .collect();
+                if group_dirs.is_empty() {
+                    continue;
+                }
+                for d in &group_dirs {
+                    grouped_paths.insert(d.path.as_str());
+                }
+                if let Some(title) = group.name.get(lang).or_else(|| group.name.get_or_fallback(lang)) {
+                    out.push_str(&format!("{sub_prefix} {title}\n\n"));
+                }
+                out.push_str(&catalog_table(ctx, &group_dirs, lang));
+                out.push('\n');
+            }
+            let remaining: Vec<&crate::scan::DirStats> = dirs
+                .iter()
+                .copied()
+                .filter(|d| !grouped_paths.contains(d.path.as_str()))
+                .collect();
+            if !remaining.is_empty() {
+                out.push_str(&format!(
+                    "{sub_prefix} {}\n\n",
+                    t(lang, "Other folders", "其他目录")
+                ));
+                out.push_str(&catalog_table(ctx, &remaining, lang));
+                out.push('\n');
+            }
+        }
+    }
+
+    let show_only_annotated = dirs.len() >= 4
+        && dirs
+            .iter()
+            .any(|dir| ctx.config.dirs.contains_key(&dir.path));
+
     let mut count = 0usize;
     for dir in dirs {
         if count >= 60 {
             break;
         }
-        count += 1;
         let annotation = ctx.config.dirs.get(&dir.path);
-        out.push_str(&format!("### `{}`", md_code(&dir.path)));
+        if show_only_annotated && annotation.is_none() {
+            continue;
+        }
+        if dirs.len() >= 4 && !show_only_annotated {
+            break;
+        }
+        count += 1;
+        out.push_str(&format!("{sub_prefix} `{}`", md_code(&dir.path)));
         out.push_str(&format!(" · {}", dir.size_human()));
         if dir.images > 0 {
             out.push_str(&format!(
@@ -651,6 +925,105 @@ fn catalog(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
         }
     }
     Some(out.trim_end().to_string())
+}
+
+fn catalog_table(ctx: &Ctx<'_>, dirs: &[&crate::scan::DirStats], lang: Lang) -> String {
+    let mut rows = Vec::new();
+    for dir in dirs.iter().take(60) {
+        let count_str = if dir.images > 0 && dir.videos > 0 {
+            format!(
+                "{} + {} {}",
+                format_count(dir.images),
+                format_count(dir.videos),
+                t(lang, "video", "视频")
+            )
+        } else if dir.images > 0 {
+            format_count(dir.images)
+        } else if dir.videos > 0 {
+            format!(
+                "{} {}",
+                format_count(dir.videos),
+                t(lang, "video", "视频")
+            )
+        } else {
+            format_count(dir.files)
+        };
+        let summary = ctx
+            .config
+            .dirs
+            .get(&dir.path)
+            .and_then(|ann| ann.summary.get(lang).or_else(|| ann.summary.get_or_fallback(lang)))
+            .unwrap_or("—")
+            .trim()
+            .to_string();
+        rows.push(vec![
+            format!("`{}`", md_code(&dir.path)),
+            count_str,
+            dir.size_human(),
+            summary,
+        ]);
+    }
+    table(
+        &[
+            t(lang, "Folder", "目录"),
+            t(lang, "Items", "数量"),
+            t(lang, "Size", "体积"),
+            t(lang, "Summary", "说明"),
+        ],
+        &rows,
+    )
+}
+
+fn setup(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
+    if ctx.config.setup.is_empty() {
+        return None;
+    }
+    let mut rows = Vec::new();
+    for item in &ctx.config.setup {
+        let target = item
+            .target
+            .get(lang)
+            .or_else(|| item.target.get_or_fallback(lang))
+            .unwrap_or("")
+            .to_string();
+        let recommend = item
+            .recommend
+            .get(lang)
+            .or_else(|| item.recommend.get_or_fallback(lang))
+            .unwrap_or("")
+            .to_string();
+        rows.push(vec![format!("**{target}**"), recommend]);
+    }
+    Some(table(
+        &[
+            t(lang, "Setup / device", "设备 / 场景"),
+            t(lang, "Where to start", "推荐入口"),
+        ],
+        &rows,
+    ))
+}
+
+fn tooling(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
+    if ctx.config.tooling.is_empty() {
+        return None;
+    }
+    let mut rows = Vec::new();
+    for item in &ctx.config.tooling {
+        let note = item
+            .note
+            .get(lang)
+            .or_else(|| item.note.get_or_fallback(lang))
+            .unwrap_or("")
+            .to_string();
+        rows.push(vec![format!("`{}`", md_code(&item.command)), note]);
+    }
+    Some(table(
+        &[
+            t(lang, "Command / script", "命令 / 脚本"),
+            t(lang, "What it does", "作用"),
+        ],
+        &rows,
+    ))
 }
 
 fn structure(ctx: &Ctx<'_>) -> Option<String> {
@@ -864,13 +1237,10 @@ fn license(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
         Lang::Zh => format!("本项目采用 **{name}** 许可证。"),
     };
     if let Some(file) = file {
-        out.push_str(&format!(
-            " {}",
-            match lang {
-                Lang::En => format!("See [`{file}`]({file})."),
-                Lang::Zh => format!("详见 [`{file}`]({file})。"),
-            }
-        ));
+        out.push_str(&match lang {
+            Lang::En => format!(" See [`{file}`]({file})."),
+            Lang::Zh => format!("详见 [`{file}`]({file})。"),
+        });
     }
     Some(out)
 }
@@ -925,6 +1295,9 @@ fn changelog(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
         return Some(out);
     }
 
+    if !matches!(ctx.preset, Preset::Dataset | Preset::Showcase) {
+        return None;
+    }
     let git = ctx.facts.git.as_ref()?;
     if git.recent.is_empty() {
         return None;
@@ -945,6 +1318,12 @@ fn changelog(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
 }
 
 fn cta(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
+    let explicit = ctx.config.cta.star.is_some()
+        || ctx.config.cta.fork.is_some()
+        || !ctx.config.cta.text.is_empty();
+    if ctx.preset != Preset::Showcase && !explicit {
+        return None;
+    }
     let (owner, repo) = ctx.facts.repo_slug()?;
     let star = ctx.config.cta.star.unwrap_or(true);
     let fork = ctx.config.cta.fork.unwrap_or(true);
@@ -1073,9 +1452,46 @@ fn t(lang: Lang, en: &'static str, zh: &'static str) -> &'static str {
 pub fn extract_keeps(text: &str) -> BTreeMap<(String, String), String> {
     let mut keeps = BTreeMap::new();
     let mut current: Option<(String, String, String)> = None;
+    let mut fence: Option<(char, usize)> = None;
 
     for line in text.lines() {
         let trimmed = line.trim();
+        let trimmed_start = line.trim_start();
+        if let Some(first) = trimmed_start.chars().next().filter(|&c| c == '`' || c == '~') {
+            let len = trimmed_start.chars().take_while(|&c| c == first).count();
+            if len >= 3 {
+                let rest = trimmed_start[len..].trim();
+                match fence {
+                    None => {
+                        fence = Some((first, len));
+                        if let Some((_, _, body)) = current.as_mut() {
+                            body.push_str(line);
+                            body.push('\n');
+                        }
+                        continue;
+                    }
+                    Some((open_char, open_len))
+                        if open_char == first && len >= open_len && rest.is_empty() =>
+                    {
+                        fence = None;
+                        if let Some((_, _, body)) = current.as_mut() {
+                            body.push_str(line);
+                            body.push('\n');
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if fence.is_some() {
+            if let Some((_, _, body)) = current.as_mut() {
+                body.push_str(line);
+                body.push('\n');
+            }
+            continue;
+        }
+
         if let Some(inner) = trimmed
             .strip_prefix("<!-- readme-gen:keep:")
             .and_then(|rest| rest.strip_suffix("-->"))

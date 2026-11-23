@@ -51,13 +51,14 @@ impl Preset {
 pub enum SectionKind {
     Hero,
     Badges,
-    Languages,
     Toc,
     Quickstart,
     Packs,
     Numbers,
     Catalog,
     Structure,
+    Setup,
+    Tooling,
     Install,
     Usage,
     Deps,
@@ -79,10 +80,7 @@ pub struct SectionSpec {
 
 impl SectionSpec {
     pub fn is_header(&self) -> bool {
-        matches!(
-            self.kind,
-            SectionKind::Hero | SectionKind::Badges | SectionKind::Languages
-        )
+        matches!(self.kind, SectionKind::Hero | SectionKind::Badges)
     }
 }
 
@@ -99,6 +97,8 @@ pub fn sections(preset: Preset) -> Vec<SectionSpec> {
             ("deps", Deps),
             ("contributing", Contributing),
             ("license", License),
+            ("changelog", Changelog),
+            ("cta", Cta),
         ],
         Preset::Cli => vec![
             ("toc", Toc),
@@ -109,8 +109,11 @@ pub fn sections(preset: Preset) -> Vec<SectionSpec> {
             ("usage", Usage),
             ("structure", Structure),
             ("deps", Deps),
+            ("tooling", Tooling),
             ("contributing", Contributing),
             ("license", License),
+            ("changelog", Changelog),
+            ("cta", Cta),
         ],
         Preset::App => vec![
             ("toc", Toc),
@@ -120,7 +123,10 @@ pub fn sections(preset: Preset) -> Vec<SectionSpec> {
             ("install", Install),
             ("usage", Usage),
             ("structure", Structure),
+            ("tooling", Tooling),
             ("license", License),
+            ("changelog", Changelog),
+            ("cta", Cta),
         ],
         Preset::Dataset => vec![
             ("toc", Toc),
@@ -128,9 +134,12 @@ pub fn sections(preset: Preset) -> Vec<SectionSpec> {
             ("numbers", Numbers),
             ("catalog", Catalog),
             ("structure", Structure),
+            ("setup", Setup),
+            ("tooling", Tooling),
             ("sources", Sources),
             ("license", License),
             ("changelog", Changelog),
+            ("cta", Cta),
         ],
         Preset::Showcase => vec![
             ("toc", Toc),
@@ -140,6 +149,8 @@ pub fn sections(preset: Preset) -> Vec<SectionSpec> {
             ("why", Prose("why")),
             ("audience", Prose("audience")),
             ("catalog", Catalog),
+            ("setup", Setup),
+            ("tooling", Tooling),
             ("sources", Sources),
             ("compatibility", Compatibility),
             ("awards", Awards),
@@ -157,10 +168,6 @@ pub fn sections(preset: Preset) -> Vec<SectionSpec> {
         SectionSpec {
             kind: Badges,
             id: "badges",
-        },
-        SectionSpec {
-            kind: Languages,
-            id: "languages",
         },
     ];
     out.extend(specs.into_iter().map(|(id, kind)| SectionSpec { kind, id }));
@@ -181,6 +188,10 @@ pub fn title(kind: SectionKind, lang: Lang) -> &'static str {
         (SectionKind::Catalog, Lang::Zh) => "目录一览",
         (SectionKind::Structure, Lang::En) => "Project structure",
         (SectionKind::Structure, Lang::Zh) => "项目结构",
+        (SectionKind::Setup, Lang::En) => "Pick your setup",
+        (SectionKind::Setup, Lang::Zh) => "使用建议",
+        (SectionKind::Tooling, Lang::En) => "Tooling",
+        (SectionKind::Tooling, Lang::Zh) => "工具脚本",
         (SectionKind::Install, Lang::En) => "Installation",
         (SectionKind::Install, Lang::Zh) => "安装",
         (SectionKind::Usage, Lang::En) => "Usage",

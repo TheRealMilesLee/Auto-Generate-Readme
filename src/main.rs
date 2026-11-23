@@ -10,7 +10,7 @@ use readme_gen::llm;
 use readme_gen::outline::{self, Preset, SectionKind};
 use readme_gen::render::{self, Ctx};
 use readme_gen::scan::{self, Facts, ScanOptions};
-use readme_gen::util::{read_text, read_text_lossy, write_text_atomic};
+use readme_gen::util::{clean_path, read_text, read_text_lossy, write_text_atomic};
 use readme_gen::validate;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -385,17 +385,25 @@ fn command_check(cli: &Cli) -> Result<()> {
         )));
     }
     let text = read_text(&out)?;
-    let locales = render::extract_meta_locales(&text)
-        .or_else(|| {
-            if config.locales.is_empty() {
-                None
-            } else {
-                Some(config.locales.clone())
-            }
-        })
-        .unwrap_or_else(|| vec![Lang::En]);
+    let locales = if let Some(langs) = &cli.langs {
+        langs.clone()
+    } else if !config.locales.is_empty() {
+        config.locales.clone()
+    } else {
+        render::extract_meta_locales(&text).unwrap_or_else(|| vec![Lang::En])
+    };
 
-    let report = validate::validate(&text, &facts, &config, &locales, &out);
+    let mut check_config = config.clone();
+    if let Some(preset_str) = &cli.preset {
+        let preset = Preset::parse(preset_str).ok_or_else(|| {
+            Error::new(format!(
+                "unknown preset '{preset_str}' (library|cli|app|dataset|showcase)"
+            ))
+        })?;
+        check_config.preset = Some(preset);
+    }
+
+    let report = validate::validate(&text, &facts, &check_config, &locales, &out);
     report.print();
 
     if !report.is_ok() || (cli.strict && !report.warnings.is_empty()) {
@@ -619,7 +627,7 @@ fn init_template(facts: &Facts, preset: Preset, locales: &[Lang]) -> String {
             out.push_str(&format!("    {}: \"\"\n", lang.as_str()));
         }
     }
-    out.push_str("\n# Optional: sources, compatibility, awards, changelog.\n");
+    out.push_str("\n# Optional: announcements, setup, tooling, sources, compatibility, awards, changelog, cta.\n");
     out.push_str("# sources:\n#   - name: Example\n#     url: https://example.com\n#     note:\n#       en: \"\"\n");
     out
 }
@@ -648,9 +656,9 @@ fn exclude_relative(root: &Path, out: &Path) -> Vec<String> {
 
 fn absolute(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
-        Ok(path.to_path_buf())
+        Ok(clean_path(path))
     } else {
-        Ok(std::env::current_dir()?.join(path))
+        Ok(clean_path(&std::env::current_dir()?.join(path)))
     }
 }
 

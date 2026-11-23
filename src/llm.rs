@@ -73,6 +73,9 @@ pub fn generate(
     let allowed = validate::allowed_numbers(facts, config);
 
     for id in section_ids {
+        let mut generated_for_id: Vec<Lang> = Vec::new();
+        let mut missing_for_id: Vec<Lang> = Vec::new();
+
         for lang in locales {
             if config
                 .sections
@@ -85,13 +88,33 @@ pub fn generate(
             match generate_one(facts, config, id, *lang, &allowed, options) {
                 Ok(Some(text)) => {
                     output.generated.insert((id.to_string(), *lang), text);
+                    generated_for_id.push(*lang);
                 }
-                Ok(None) => {}
-                Err(error) => output.warnings.push(format!(
-                    "llm section '{id}' ({}) skipped: {error}",
-                    lang.as_str()
-                )),
+                Ok(None) => {
+                    missing_for_id.push(*lang);
+                }
+                Err(error) => {
+                    missing_for_id.push(*lang);
+                    output.warnings.push(format!(
+                        "llm section '{id}' ({}) skipped: {error}",
+                        lang.as_str()
+                    ));
+                }
             }
+        }
+
+        if locales.len() > 1 && !generated_for_id.is_empty() && !missing_for_id.is_empty() {
+            for lang in generated_for_id {
+                output.generated.remove(&(id.to_string(), lang));
+            }
+            output.warnings.push(format!(
+                "llm section '{id}' dropped for bilingual parity (missing {})",
+                missing_for_id
+                    .iter()
+                    .map(|l| l.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
     }
     Ok(output)
@@ -105,7 +128,7 @@ fn generate_one(
     allowed: &HashSet<String>,
     options: &Options,
 ) -> Result<Option<String>> {
-    let cache_path = cache_path(facts, id, lang, options);
+    let cache_path = cache_path(facts, config, id, lang, options);
     if !options.no_cache {
         if let Ok(cached) = read_text_lossy(&cache_path) {
             if validate_content(&cached, allowed).is_ok() {
@@ -214,7 +237,7 @@ fn prompt(
             ));
         }
     }
-    if context.len() > 4000 {
+    if context.chars().count() > 4000 {
         context = context.chars().take(4000).collect();
     }
 
@@ -287,15 +310,17 @@ fn validate_content(content: &str, allowed: &HashSet<String>) -> std::result::Re
     Ok(())
 }
 
-fn cache_path(facts: &Facts, id: &str, lang: Lang, options: &Options) -> PathBuf {
+fn cache_path(facts: &Facts, config: &Config, id: &str, lang: Lang, options: &Options) -> PathBuf {
     let mut key = Json::obj();
     key.push("prompt", PROMPT_VERSION);
     key.push("facts", facts.hash.clone());
+    key.push("config", config.content_hash());
     key.push("section", id);
     key.push("lang", lang.as_str());
     key.push("model", options.model.clone());
     key.push("endpoint", options.endpoint.clone());
     key.push("temperature", options.temperature.to_string());
+    key.push("max_tokens", u64::from(options.max_tokens));
     let digest = sha256::hex_digest(key.to_compact().as_bytes());
     options.cache_dir.join(format!("{digest}.md"))
 }
@@ -461,11 +486,13 @@ fn parse_http_response(response: &[u8]) -> Result<String> {
     let body = if chunked {
         decode_chunked(raw_body)?
     } else if let Some(length) = content_length {
-        if raw_body.len() >= length {
-            raw_body[..length].to_vec()
-        } else {
-            raw_body.to_vec()
+        if raw_body.len() < length {
+            return Err(Error::new(format!(
+                "truncated HTTP response: expected {length} bytes, got {}",
+                raw_body.len()
+            )));
         }
+        raw_body[..length].to_vec()
     } else {
         raw_body.to_vec()
     };
@@ -570,5 +597,11 @@ mod tests {
     fn cleans_models_that_add_headings() {
         assert_eq!(clean("## Why\n\nText"), "Text");
         assert_eq!(clean("```markdown\nText\n```"), "Text");
+    }
+
+    #[test]
+    fn rejects_truncated_http_body() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"choices\":";
+        assert!(parse_http_response(response).is_err());
     }
 }
