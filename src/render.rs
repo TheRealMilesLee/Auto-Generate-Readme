@@ -862,65 +862,65 @@ fn catalog(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
         }
     }
 
-    let show_only_annotated = dirs.len() >= 4
-        && dirs
-            .iter()
-            .any(|dir| ctx.config.dirs.contains_key(&dir.path));
+    let has_table = dirs.len() >= 4;
+    let has_annotations = dirs
+        .iter()
+        .any(|dir| ctx.config.dirs.contains_key(&dir.path));
 
-    let mut count = 0usize;
-    for dir in dirs {
-        if count >= 60 {
-            break;
-        }
-        let annotation = ctx.config.dirs.get(&dir.path);
-        if show_only_annotated && annotation.is_none() {
-            continue;
-        }
-        if dirs.len() >= 4 && !show_only_annotated {
-            break;
-        }
-        count += 1;
-        out.push_str(&format!("{sub_prefix} `{}`", md_code(&dir.path)));
-        out.push_str(&format!(" · {}", dir.size_human()));
-        if dir.images > 0 {
-            out.push_str(&format!(
-                " · {} {}",
-                format_count(dir.images),
-                t(lang, "images", "张图片")
-            ));
-        }
-        if dir.videos > 0 {
-            out.push_str(&format!(
-                " · {} {}",
-                format_count(dir.videos),
-                t(lang, "videos", "个视频")
-            ));
-        }
-        if dir.images == 0 && dir.videos == 0 {
-            out.push_str(&format!(
-                " · {} {}",
-                format_count(dir.files),
-                t(lang, "files", "个文件")
-            ));
-        }
-        out.push_str("\n\n");
-
-        if let Some(annotation) = annotation {
-            if let Some(summary) = annotation
-                .summary
-                .get(lang)
-                .or_else(|| annotation.summary.get_or_fallback(lang))
-            {
-                out.push_str(summary.trim());
-                out.push_str("\n\n");
+    if !(has_table && !has_annotations) {
+        let mut count = 0usize;
+        for dir in &dirs {
+            if count >= 60 {
+                break;
             }
-            if !annotation.bullets.is_empty() {
-                for bullet in &annotation.bullets {
-                    if let Some(text) = bullet.get(lang).or_else(|| bullet.get_or_fallback(lang)) {
-                        out.push_str(&format!("- {}\n", text.trim()));
-                    }
+            let annotation = ctx.config.dirs.get(&dir.path);
+            if has_table && annotation.is_none() {
+                continue;
+            }
+            count += 1;
+            out.push_str(&format!("{sub_prefix} `{}`", md_code(&dir.path)));
+            out.push_str(&format!(" · {}", dir.size_human()));
+            if dir.images > 0 {
+                out.push_str(&format!(
+                    " · {} {}",
+                    format_count(dir.images),
+                    t(lang, "images", "张图片")
+                ));
+            }
+            if dir.videos > 0 {
+                out.push_str(&format!(
+                    " · {} {}",
+                    format_count(dir.videos),
+                    t(lang, "videos", "个视频")
+                ));
+            }
+            if dir.images == 0 && dir.videos == 0 {
+                out.push_str(&format!(
+                    " · {} {}",
+                    format_count(dir.files),
+                    t(lang, "files", "个文件")
+                ));
+            }
+            out.push_str("\n\n");
+
+            if let Some(annotation) = annotation {
+                if let Some(summary) = annotation
+                    .summary
+                    .get(lang)
+                    .or_else(|| annotation.summary.get_or_fallback(lang))
+                {
+                    out.push_str(summary.trim());
+                    out.push_str("\n\n");
                 }
-                out.push('\n');
+                if !annotation.bullets.is_empty() {
+                    for bullet in &annotation.bullets {
+                        if let Some(text) = bullet.get(lang).or_else(|| bullet.get_or_fallback(lang))
+                        {
+                            out.push_str(&format!("- {}\n", text.trim()));
+                        }
+                    }
+                    out.push('\n');
+                }
             }
         }
     }
