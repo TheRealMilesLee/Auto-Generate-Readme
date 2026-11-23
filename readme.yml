@@ -43,8 +43,8 @@ announcements:
   - kind: NOTE
     date: "2026-11-23"
     text:
-      en: "Validator & renderer upgrade: config-hash drift checks, bilingual H2/H3 outline hierarchy, `3840×2160` resolution tracing, grouped catalog overview tables, and `keep` heading deduplication."
-      zh: "校验与渲染升级：新增 `readme.yml` 配置漂移校验、双语 H2/H3 标题层级、`3840×2160` 分辨率溯源、分组目录总览表与 `keep` 区块标题去重。"
+      en: "Feature suite update: added `diff`, `adopt`, `doctor`, `annotate`, `locale_mode: split`, `--media-meta` header dimension parsing, `rules:` repo invariants, Cargo/npm workspace discovery, `usage.capture`, and `--no-thinking`."
+      zh: "功能全面升级：新增 `diff`、`adopt`、`doctor`、`annotate`、`locale_mode: split` 双语拆文件、`--media-meta` 图片头解析、`rules:` 仓库规则校验、Workspace 扫描、`usage.capture` 与 `--no-thinking`。"
 
 quickstart:
   clone: https://github.com/TheRealMilesLee/Auto-Generate-Readme.git
@@ -130,11 +130,19 @@ sections:
       Scan first, then generate and validate:
 
       ```bash
-      readme-gen scan --out .readme/facts.json
+      readme-gen scan --out .readme/facts.json --media-meta
       readme-gen plan --preset showcase
       readme-gen init --preset showcase --lang en,zh
       readme-gen build
+      readme-gen diff
       readme-gen check --strict
+      readme-gen doctor
+      ```
+
+      Existing repository with a hand-written README? Wrap it safely:
+
+      ```bash
+      readme-gen adopt
       ```
 
       Choose from five built-in presets (`library`, `cli`, `app`, `dataset`, `showcase`):
@@ -164,11 +172,19 @@ sections:
       先扫描，再规划、生成和校验：
 
       ```bash
-      readme-gen scan --out .readme/facts.json
+      readme-gen scan --out .readme/facts.json --media-meta
       readme-gen plan --preset showcase
       readme-gen init --preset showcase --lang en,zh
       readme-gen build
+      readme-gen diff
       readme-gen check --strict
+      readme-gen doctor
+      ```
+
+      已有手写 README？一条命令接管并保留现有内容：
+
+      ```bash
+      readme-gen adopt
       ```
 
       内置五个 preset（`library`、`cli`、`app`、`dataset`、`showcase`）：
@@ -207,8 +223,8 @@ tooling:
 changelog:
   - date: "2026-11-23"
     text:
-      en: "Fixed `keep` heading duplication, `3840×2160` number tracing, config-aware LLM caching, single-pass scanning, and bilingual H2/H3 hierarchy; added alerts, setup/tooling tables, grouped catalog overviews, clickable badges, and `changelog`/`cta` support for CLI/library presets."
-      zh: "修复 `keep` 区块标题重复、`3840×2160` 数字误杀、LLM 缓存未感知配置变更、双倍遍历与双语标题层级问题；新增置顶公告、场景推荐/工具脚本表、分组目录总览、可点击徽章及 CLI/库 preset 的更新记录与 CTA 支持。"
+      en: "Added `diff`, `adopt`, `doctor`, `annotate`, split bilingual files (`locale_mode: split`), `--media-meta` header parsing, `rules:` invariants, workspace scanning, `usage.capture`, and `--no-thinking`; fixed `keep` heading duplication, `×` resolution tracing, and config-aware caching."
+      zh: "新增 `diff`、`adopt`、`doctor`、`annotate`、双语拆文件（`locale_mode: split`）、`--media-meta` 图片头解析、`rules:` 仓库规则校验、Workspace 扫描、`usage.capture` 与 `--no-thinking`；修复 `keep` 标题重复、`×` 分辨率溯源与缓存失效问题。"
   - date: "2026-10-21"
     text:
       en: "Complete rewrite in Rust: deterministic facts, section presets, validator, keep blocks, and optional llama.cpp prose. The Python and Bash implementations moved to legacy/."

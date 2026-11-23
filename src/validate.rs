@@ -74,7 +74,160 @@ pub fn validate(
     check_keeps(text, &mut report);
     check_numbers(text, facts, config, &mut report);
     check_headings(text, &mut report);
+    check_rules(facts, config, &mut report);
+    check_config_hygiene(facts, config, &mut report);
     report
+}
+
+pub fn validate_split(
+    files: &[(Lang, &str, &Path)],
+    facts: &Facts,
+    config: &Config,
+) -> Report {
+    let mut combined = Report::default();
+    let mut section_sets: Vec<(Lang, HashSet<String>)> = Vec::new();
+    let mut checked_hygiene = false;
+
+    for (lang, text, path) in files {
+        let mut r = Report::default();
+        if text.trim().is_empty() {
+            r.error(format!("{} is empty", path.display()));
+        } else {
+            check_meta(text, facts, config, &[*lang], &mut r);
+            check_placeholders(text, &mut r);
+            check_fences(text, &mut r);
+            check_links(text, path, &mut r);
+            check_anchors(text, &mut r);
+            let ids = collect_section_ids(text, &mut r);
+            section_sets.push((*lang, ids));
+            check_keeps(text, &mut r);
+            check_numbers(text, facts, config, &mut r);
+            check_headings(text, &mut r);
+        }
+        let prefix = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        for err in r.errors {
+            combined.error(format!("{prefix}: {err}"));
+        }
+        for warn in r.warnings {
+            combined.warning(format!("{prefix}: {warn}"));
+        }
+        if !checked_hygiene {
+            check_rules(facts, config, &mut combined);
+            check_config_hygiene(facts, config, &mut combined);
+            checked_hygiene = true;
+        }
+    }
+
+    if section_sets.len() > 1 {
+        let (base_lang, base_ids) = &section_sets[0];
+        for (lang, ids) in section_sets.iter().skip(1) {
+            for id in base_ids.difference(ids) {
+                combined.error(format!(
+                    "bilingual mismatch: section '{id}' is in {} but missing from {}",
+                    base_lang.as_str(),
+                    lang.as_str()
+                ));
+            }
+            for id in ids.difference(base_ids) {
+                combined.error(format!(
+                    "bilingual mismatch: section '{id}' is in {} but missing from {}",
+                    lang.as_str(),
+                    base_lang.as_str()
+                ));
+            }
+        }
+    }
+
+    combined
+}
+
+pub fn check_rules(facts: &Facts, config: &Config, report: &mut Report) {
+    if let Some(max_depth) = config.rules.max_dir_depth {
+        for dir in &facts.dirs {
+            if dir.max_depth > max_depth {
+                report.error(format!(
+                    "rule violation: directory '{}' has depth {} (max_dir_depth = {})",
+                    dir.path, dir.max_depth, max_depth
+                ));
+            }
+        }
+    }
+    for ext in &config.rules.forbid_exts {
+        if let Some(&count) = facts.exts.get(ext) {
+            if count > 0 {
+                report.error(format!(
+                    "rule violation: forbidden extension '.{ext}' found ({count} file(s))"
+                ));
+            }
+        }
+    }
+    if config.rules.no_empty_dirs {
+        for dir in &facts.empty_dirs {
+            report.error(format!(
+                "rule violation: empty directory '{}' (no_empty_dirs = true)",
+                dir
+            ));
+        }
+    }
+    if config.rules.require_dir_annotations {
+        for dir in &facts.dirs {
+            let has_summary = config
+                .dirs
+                .get(&dir.path)
+                .is_some_and(|ann| !ann.summary.is_empty());
+            if !has_summary {
+                report.warning(format!(
+                    "missing directory annotation in readme.yml for '{}'",
+                    dir.path
+                ));
+            }
+        }
+    }
+}
+
+pub fn check_config_hygiene(facts: &Facts, config: &Config, report: &mut Report) {
+    for key in &config.unknown_keys {
+        report.warning(format!("readme.yml: unknown top-level key '{key}'"));
+    }
+    let existing: HashSet<&str> = facts.dirs.iter().map(|d| d.path.as_str()).collect();
+    if existing.is_empty() && config.dirs.is_empty() {
+        return;
+    }
+    for dir_name in config.dirs.keys() {
+        if !existing.contains(dir_name.as_str()) {
+            report.warning(format!(
+                "readme.yml: dirs entry '{dir_name}' does not match any scanned top-level folder"
+            ));
+        }
+    }
+    for dir_name in &config.catalog_order {
+        if !existing.contains(dir_name.as_str()) {
+            report.warning(format!(
+                "readme.yml: catalog.order entry '{dir_name}' does not match any scanned top-level folder"
+            ));
+        }
+    }
+    for pack in &config.quickstart.packs {
+        for dir_name in &pack.dirs {
+            if !existing.contains(dir_name.as_str()) {
+                report.warning(format!(
+                    "readme.yml: quickstart.packs references missing folder '{dir_name}'"
+                ));
+            }
+        }
+    }
+    for group in &config.catalog_groups {
+        for dir_name in &group.dirs {
+            if !existing.contains(dir_name.as_str()) {
+                report.warning(format!(
+                    "readme.yml: catalog.groups references missing folder '{dir_name}'"
+                ));
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -170,6 +323,15 @@ fn check_meta(
                 "README locale mismatch: document has [{}] but expected [{}]",
                 actual.join(", "),
                 expected.join(", ")
+            ));
+        }
+    }
+
+    if let Some(actual_mode) = meta.get("locale_mode").and_then(|v| v.as_str()) {
+        let expected_mode = config.locale_mode.as_str();
+        if actual_mode != expected_mode {
+            report.error(format!(
+                "README locale_mode mismatch: document uses '{actual_mode}' but readme.yml specifies '{expected_mode}'"
             ));
         }
     }
@@ -289,6 +451,59 @@ fn check_anchors(text: &str, report: &mut Report) {
             ));
         }
     }
+}
+
+fn collect_section_ids(text: &str, report: &mut Report) -> HashSet<String> {
+    let mut open: HashMap<(String, String), usize> = HashMap::new();
+    let mut all_ids: HashSet<String> = HashSet::new();
+    let mut fence = None;
+
+    for (index, line) in text.lines().enumerate() {
+        if step_fence(&mut fence, line) || fence.is_some() {
+            continue;
+        }
+        let Some(inner) = line
+            .trim()
+            .strip_prefix("<!-- readme-gen:section:")
+            .and_then(|rest| rest.strip_suffix("-->"))
+        else {
+            continue;
+        };
+        let parts: Vec<&str> = inner.trim().split(':').collect();
+        if parts.len() != 3 {
+            report.warning(format!("line {}: malformed section marker", index + 1));
+            continue;
+        }
+        let lang = parts[0].trim().to_string();
+        let id = parts[1].trim().to_string();
+        match parts[2].trim() {
+            "start" => {
+                if open.insert((lang.clone(), id.clone()), index + 1).is_some() {
+                    report.error(format!(
+                        "line {}: duplicate start marker for {lang}:{id}",
+                        index + 1
+                    ));
+                }
+            }
+            "end" => {
+                if open.remove(&(lang, id.clone())).is_none() {
+                    report.error(format!(
+                        "line {}: end marker without start for {id}",
+                        index + 1
+                    ));
+                }
+                all_ids.insert(id);
+            }
+            _ => report.warning(format!("line {}: malformed section marker", index + 1)),
+        }
+    }
+
+    for ((lang, id), line) in open {
+        report.error(format!(
+            "line {line}: unclosed section marker for {lang}:{id}"
+        ));
+    }
+    all_ids
 }
 
 fn check_markers(text: &str, locales: &[Lang], report: &mut Report) {

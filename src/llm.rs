@@ -39,6 +39,7 @@ pub struct Options {
     pub timeout: Duration,
     pub cache_dir: PathBuf,
     pub no_cache: bool,
+    pub no_thinking: bool,
 }
 
 impl Default for Options {
@@ -52,6 +53,7 @@ impl Default for Options {
             timeout: Duration::from_secs(180),
             cache_dir: PathBuf::from(".readme/cache/llm"),
             no_cache: false,
+            no_thinking: false,
         }
     }
 }
@@ -285,6 +287,11 @@ fn validate_content(content: &str, allowed: &HashSet<String>) -> std::result::Re
     {
         return Err("response contains a heading; return the body only".to_string());
     }
+    if content.contains("<think>") || content.contains("</think>") {
+        return Err(
+            "response contains <think> reasoning tags; disable thinking at the server or pass --no-thinking".to_string(),
+        );
+    }
     let lower = content.to_lowercase();
     for banned in [
         "as an ai",
@@ -400,6 +407,11 @@ fn chat(options: &Options, messages: &[(String, String)]) -> Result<String> {
     body.push("temperature", Json::Float(options.temperature));
     body.push("max_tokens", u64::from(options.max_tokens));
     body.push("stream", false);
+    if options.no_thinking {
+        let mut kwargs = Json::obj();
+        kwargs.push("enable_thinking", false);
+        body.push("chat_template_kwargs", kwargs);
+    }
     let body = body.to_compact();
 
     let mut request = format!(
@@ -526,6 +538,111 @@ fn parse_http_response(response: &[u8]) -> Result<String> {
         .or_else(|| choice.get("text").and_then(|value| value.as_str()))
         .ok_or_else(|| Error::new("model response has no content"))?;
     Ok(content.to_string())
+}
+
+pub fn probe(options: &Options) -> Result<String> {
+    let start = std::time::Instant::now();
+    let messages = vec![
+        (
+            "system".to_string(),
+            "Reply with the single word OK.".to_string(),
+        ),
+        ("user".to_string(), "Ping".to_string()),
+    ];
+    let reply = chat(options, &messages)?;
+    let ms = start.elapsed().as_millis();
+    if reply.contains("<think>") {
+        return Err(Error::new(format!(
+            "connected to {} ({ms} ms), but model emitted <think> reasoning tags — launch with --reasoning-budget 0 or pass --no-thinking",
+            options.endpoint
+        )));
+    }
+    Ok(format!(
+        "ok ({} ms, model '{}', reply '{}')",
+        ms,
+        options.model,
+        crate::util::truncate_chars(reply.trim(), 40)
+    ))
+}
+
+pub fn annotate_dirs(
+    facts: &Facts,
+    config: &Config,
+    locales: &[Lang],
+    force: bool,
+    options: &Options,
+) -> Result<(BTreeMap<String, BTreeMap<Lang, String>>, Vec<String>)> {
+    let mut drafted: BTreeMap<String, BTreeMap<Lang, String>> = BTreeMap::new();
+    let mut warnings = Vec::new();
+    let allowed = validate::allowed_numbers(facts, config);
+
+    for dir in facts.dirs.iter().take(40) {
+        let existing = config.dirs.get(&dir.path);
+        for &lang in locales {
+            if !force && existing.and_then(|d| d.summary.get(lang)).is_some() {
+                continue;
+            }
+            let language = match lang {
+                Lang::En => "English",
+                Lang::Zh => "Simplified Chinese (简体中文)",
+            };
+            let top_exts = dir
+                .exts
+                .iter()
+                .take(5)
+                .map(|(k, v)| format!("{k}:{v}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let system = format!(
+                "You write a concise 1-sentence folder summary for a repository catalog.\n\
+                 Rules:\n\
+                 - Write in {language}, 8-20 words, no heading, no bullets, no quotes.\n\
+                 - Only use numbers that appear verbatim in FACTS (prefer avoiding raw numbers).\n\
+                 - Describe the likely theme/role from the folder name and file mix without inventing claims."
+            );
+            let user = format!(
+                "PROJECT: {} ({})\nFOLDER: {}\nFACTS: {} files ({} images, {} videos), {}, exts [{}]\nWrite one concise summary sentence.",
+                facts.name,
+                facts.kind.as_str(),
+                dir.path,
+                dir.files,
+                dir.images,
+                dir.videos,
+                dir.size_human(),
+                top_exts
+            );
+            let messages = vec![("system".to_string(), system), ("user".to_string(), user)];
+            match chat(options, &messages) {
+                Ok(raw) => {
+                    let cleaned = clean(&raw).replace('\n', " ");
+                    let mut single_allowed = allowed.clone();
+                    single_allowed.insert(dir.files.to_string());
+                    single_allowed.insert(dir.images.to_string());
+                    single_allowed.insert(dir.videos.to_string());
+                    if let Err(err) = validate_content(&cleaned, &single_allowed) {
+                        warnings.push(format!(
+                            "annotate '{}' ({}) rejected: {err}",
+                            dir.path,
+                            lang.as_str()
+                        ));
+                    } else {
+                        drafted
+                            .entry(dir.path.clone())
+                            .or_default()
+                            .insert(lang, cleaned);
+                    }
+                }
+                Err(err) => {
+                    warnings.push(format!(
+                        "annotate '{}' ({}) failed: {err}",
+                        dir.path,
+                        lang.as_str()
+                    ));
+                }
+            }
+        }
+    }
+    Ok((drafted, warnings))
 }
 
 fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>> {

@@ -1,11 +1,14 @@
 //! `readme-gen`: generate verifiable README files from repository facts.
 
+pub mod adopt;
 pub mod annotations;
+pub mod diff;
 pub mod error;
 pub mod glob;
 pub mod json;
 pub mod lang;
 pub mod llm;
+pub mod media;
 pub mod outline;
 pub mod render;
 pub mod scan;

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::json::Json;
-use crate::lang::{Lang, Loc};
+use crate::lang::{Lang, LocaleMode, Loc};
 use crate::outline::Preset;
 use crate::sha256;
 use crate::util::read_text;
@@ -118,12 +118,32 @@ pub struct LlmAnn {
     pub endpoint: Option<String>,
     pub model: Option<String>,
     pub temperature: Option<f64>,
+    pub no_thinking: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RulesAnn {
+    pub max_dir_depth: Option<usize>,
+    pub forbid_exts: Vec<String>,
+    pub no_empty_dirs: bool,
+    pub require_dir_annotations: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UsageAnn {
+    pub capture: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ScanAnn {
+    pub media_meta: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub preset: Option<Preset>,
     pub locales: Vec<Lang>,
+    pub locale_mode: LocaleMode,
     pub project: ProjectAnn,
     pub nav: Vec<NavItem>,
     pub announcements: Vec<Announcement>,
@@ -145,6 +165,10 @@ pub struct Config {
     pub badge_links: bool,
     pub credit: bool,
     pub llm: LlmAnn,
+    pub rules: RulesAnn,
+    pub usage: UsageAnn,
+    pub scan: ScanAnn,
+    pub unknown_keys: Vec<String>,
 }
 
 impl Default for Config {
@@ -152,6 +176,7 @@ impl Default for Config {
         Self {
             preset: None,
             locales: Vec::new(),
+            locale_mode: LocaleMode::Single,
             project: ProjectAnn::default(),
             nav: Vec::new(),
             announcements: Vec::new(),
@@ -173,6 +198,10 @@ impl Default for Config {
             badge_links: true,
             credit: true,
             llm: LlmAnn::default(),
+            rules: RulesAnn::default(),
+            usage: UsageAnn::default(),
+            scan: ScanAnn::default(),
+            unknown_keys: Vec::new(),
         }
     }
 }
@@ -493,6 +522,48 @@ impl Config {
             config.credit = credit;
         }
 
+        const KNOWN_TOP_KEYS: &[&str] = &[
+            "preset",
+            "locale",
+            "locale_mode",
+            "project",
+            "nav",
+            "announcements",
+            "quickstart",
+            "numbers",
+            "dirs",
+            "sections",
+            "setup",
+            "tooling",
+            "sources",
+            "compatibility",
+            "awards",
+            "changelog",
+            "cta",
+            "catalog",
+            "exclude",
+            "excludes",
+            "badges",
+            "credit",
+            "llm",
+            "rules",
+            "usage",
+            "scan",
+        ];
+        for (key, _) in value.as_map() {
+            if !KNOWN_TOP_KEYS.contains(&key.as_str()) {
+                config.unknown_keys.push(key.clone());
+            }
+        }
+
+        if let Some(mode) = value.get("locale_mode").and_then(|v| v.as_str()) {
+            config.locale_mode = LocaleMode::parse(mode).ok_or_else(|| {
+                Error::new(format!(
+                    "unknown locale_mode '{mode}' (single|split)"
+                ))
+            })?;
+        }
+
         if let Some(llm) = value.get("llm") {
             config.llm = LlmAnn {
                 endpoint: llm
@@ -504,6 +575,48 @@ impl Config {
                     .get("temperature")
                     .and_then(|value| value.as_str())
                     .and_then(|value| value.parse::<f64>().ok()),
+                no_thinking: llm.get("no_thinking").and_then(parse_bool).unwrap_or(false),
+            };
+        }
+
+        if let Some(rules) = value.get("rules") {
+            config.rules = RulesAnn {
+                max_dir_depth: rules
+                    .get("max_dir_depth")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.trim().parse::<usize>().ok()),
+                forbid_exts: rules
+                    .get("forbid_exts")
+                    .map(|v| {
+                        v.as_list()
+                            .iter()
+                            .filter_map(|e| e.as_str().map(|s| s.trim().trim_start_matches('.').to_lowercase()))
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                no_empty_dirs: rules.get("no_empty_dirs").and_then(parse_bool).unwrap_or(false),
+                require_dir_annotations: rules
+                    .get("require_dir_annotations")
+                    .and_then(parse_bool)
+                    .unwrap_or(false),
+            };
+        }
+
+        if let Some(usage) = value.get("usage") {
+            config.usage = UsageAnn {
+                capture: usage
+                    .get("capture")
+                    .or_else(|| usage.get("capture_help"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            };
+        }
+
+        if let Some(scan) = value.get("scan") {
+            config.scan = ScanAnn {
+                media_meta: scan.get("media_meta").and_then(parse_bool).unwrap_or(false),
             };
         }
 
@@ -752,6 +865,7 @@ impl Config {
             locales.push_value(lang.as_str());
         }
         root.push("locales", locales);
+        root.push("locale_mode", self.locale_mode.as_str());
 
         let mut project = Json::obj();
         project.push("name", self.project.name.clone());
@@ -923,6 +1037,7 @@ impl Config {
         root.push("badge_style", self.badge_style.clone());
         root.push("badge_links", self.badge_links);
         root.push("credit", self.credit);
+        root.push("usage_capture", self.usage.capture.clone());
 
         sha256::hex_digest(root.to_compact().as_bytes())
     }

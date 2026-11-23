@@ -40,6 +40,30 @@ impl Lang {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocaleMode {
+    #[default]
+    Single,
+    Split,
+}
+
+impl LocaleMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "single" | "combined" | "inline" => Some(LocaleMode::Single),
+            "split" | "separate" | "files" => Some(LocaleMode::Split),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LocaleMode::Single => "single",
+            LocaleMode::Split => "split",
+        }
+    }
+}
+
 /// A string with optional English and Chinese variants.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Loc {

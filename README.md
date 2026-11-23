@@ -1,10 +1,10 @@
-<!-- readme-gen:meta {"schema":1,"facts":"bbbaf0332f576ea14c110fc8976d2a0f56dccf816b4b80769d048fe86a717435","config":"7559ef630fef54eec241677d94a1b2a559e74daee4711921ba9bb3213a209d16","preset":"cli","locales":["en","zh"],"generator":"readme-gen/0.1.0"} -->
+<!-- readme-gen:meta {"schema":1,"facts":"0b48bd016fc3454c3760b209d9491b478f21176202471641611718916d532df5","config":"09fc0b18e5070b80741755186d168061ad7a8757a7a10a75a8a1e0d0b0d93d9d","preset":"cli","locale_mode":"single","locales":["en","zh"],"generator":"readme-gen/0.1.0"} -->
 # readme-gen
 
 <p align="center">
   <strong>READMEs that cannot lie about their numbers.</strong><br>
   <sub>不会在数字上撒谎的 README 生成器。</sub><br>
-  <sub>CLI tool · Rust · 30 files · MIT</sub>
+  <sub>CLI tool · Rust · 33 files · MIT</sub>
 </p>
 
 <p align="center">
@@ -23,9 +23,9 @@
 <p align="center"><a href="#english">English</a> · <a href="#chinese">中文</a> · <a href="#quickstart">Quick start</a> · <a href="#why">Why</a> · <a href="#usage">Usage</a> · <a href="#tooling">Tooling</a> · <a href="#changelog">Update log</a></p>
 
 > [!NOTE]
-> **2026-11-23** · Validator & renderer upgrade: config-hash drift checks, bilingual H2/H3 outline hierarchy, `3840×2160` resolution tracing, grouped catalog overview tables, and `keep` heading deduplication.
+> **2026-11-23** · Feature suite update: added `diff`, `adopt`, `doctor`, `annotate`, `locale_mode: split`, `--media-meta` header dimension parsing, `rules:` repo invariants, Cargo/npm workspace discovery, `usage.capture`, and `--no-thinking`.
 >
-> **2026-11-23** · 校验与渲染升级：新增 `readme.yml` 配置漂移校验、双语 H2/H3 标题层级、`3840×2160` 分辨率溯源、分组目录总览表与 `keep` 区块标题去重。
+> **2026-11-23** · 功能全面升级：新增 `diff`、`adopt`、`doctor`、`annotate`、`locale_mode: split` 双语拆文件、`--media-meta` 图片头解析、`rules:` 仓库规则校验、Workspace 扫描、`usage.capture` 与 `--no-thinking`。
 
 <a id="english"></a>
 ## English
@@ -72,8 +72,8 @@ git clone --depth 1 https://github.com/TheRealMilesLee/Auto-Generate-Readme.git
 | Metric | Value |
 |---|---|
 | **Folders** | 4 |
-| **Files** | 30 |
-| **Languages** | Rust (16), PowerShell (1), Shell (1) |
+| **Files** | 33 |
+| **Languages** | Rust (19), PowerShell (1), Shell (1) |
 | **Test files** | 1 |
 | **External dependencies** | 0 (Rust std only, MSRV 1.74) |
 | **Reference scan speed** | 0.10 s warm / 1.00 s cold (2,717 files, 5.8 GiB) |
@@ -137,11 +137,19 @@ cargo install --path .
 Scan first, then generate and validate:
 
 ```bash
-readme-gen scan --out .readme/facts.json
+readme-gen scan --out .readme/facts.json --media-meta
 readme-gen plan --preset showcase
 readme-gen init --preset showcase --lang en,zh
 readme-gen build
+readme-gen diff
 readme-gen check --strict
+readme-gen doctor
+```
+
+Existing repository with a hand-written README? Wrap it safely:
+
+```bash
+readme-gen adopt
 ```
 
 Choose from five built-in presets (`library`, `cli`, `app`, `dataset`, `showcase`):
@@ -185,7 +193,9 @@ Auto-Generate-Readme/
 │   ├── check.ps1
 │   └── check.sh
 ├── src/
+│   ├── adopt.rs
 │   ├── annotations.rs
+│   ├── diff.rs
 │   ├── error.rs
 │   ├── glob.rs
 │   ├── json.rs
@@ -193,6 +203,7 @@ Auto-Generate-Readme/
 │   ├── lib.rs
 │   ├── llm.rs
 │   ├── main.rs
+│   ├── media.rs
 │   ├── outline.rs
 │   ├── render.rs
 │   ├── scan.rs
@@ -247,7 +258,7 @@ Released under the **MIT** license. See [`LICENSE`](LICENSE).
 
 | When | What changed |
 |---|---|
-| **2026-11-23** | Fixed `keep` heading duplication, `3840×2160` number tracing, config-aware LLM caching, single-pass scanning, and bilingual H2/H3 hierarchy; added alerts, setup/tooling tables, grouped catalog overviews, clickable badges, and `changelog`/`cta` support for CLI/library presets. |
+| **2026-11-23** | Added `diff`, `adopt`, `doctor`, `annotate`, split bilingual files (`locale_mode: split`), `--media-meta` header parsing, `rules:` invariants, workspace scanning, `usage.capture`, and `--no-thinking`; fixed `keep` heading duplication, `×` resolution tracing, and config-aware caching. |
 | **2026-10-21** | Complete rewrite in Rust: deterministic facts, section presets, validator, keep blocks, and optional llama.cpp prose. The Python and Bash implementations moved to legacy/. |
 <!-- readme-gen:section:en:changelog:end -->
 
@@ -310,8 +321,8 @@ git clone --depth 1 https://github.com/TheRealMilesLee/Auto-Generate-Readme.git
 | 指标 | 数值 |
 |---|---|
 | **目录** | 4 |
-| **文件** | 30 |
-| **语言** | Rust (16), PowerShell (1), Shell (1) |
+| **文件** | 33 |
+| **语言** | Rust (19), PowerShell (1), Shell (1) |
 | **测试文件** | 1 |
 | **外部依赖** | 0（仅 Rust 标准库，MSRV 1.74） |
 | **标杆扫描性能** | 热缓存 0.10 s / 冷启动 1.00 s（2,717 文件，5.8 GiB） |
@@ -366,11 +377,19 @@ cargo install --path .
 先扫描，再规划、生成和校验：
 
 ```bash
-readme-gen scan --out .readme/facts.json
+readme-gen scan --out .readme/facts.json --media-meta
 readme-gen plan --preset showcase
 readme-gen init --preset showcase --lang en,zh
 readme-gen build
+readme-gen diff
 readme-gen check --strict
+readme-gen doctor
+```
+
+已有手写 README？一条命令接管并保留现有内容：
+
+```bash
+readme-gen adopt
 ```
 
 内置五个 preset（`library`、`cli`、`app`、`dataset`、`showcase`）：
@@ -413,7 +432,9 @@ Auto-Generate-Readme/
 │   ├── check.ps1
 │   └── check.sh
 ├── src/
+│   ├── adopt.rs
 │   ├── annotations.rs
+│   ├── diff.rs
 │   ├── error.rs
 │   ├── glob.rs
 │   ├── json.rs
@@ -421,6 +442,7 @@ Auto-Generate-Readme/
 │   ├── lib.rs
 │   ├── llm.rs
 │   ├── main.rs
+│   ├── media.rs
 │   ├── outline.rs
 │   ├── render.rs
 │   ├── scan.rs
@@ -475,7 +497,7 @@ Auto-Generate-Readme/
 
 | 时间 | 变更 |
 |---|---|
-| **2026-11-23** | 修复 `keep` 区块标题重复、`3840×2160` 数字误杀、LLM 缓存未感知配置变更、双倍遍历与双语标题层级问题；新增置顶公告、场景推荐/工具脚本表、分组目录总览、可点击徽章及 CLI/库 preset 的更新记录与 CTA 支持。 |
+| **2026-11-23** | 新增 `diff`、`adopt`、`doctor`、`annotate`、双语拆文件（`locale_mode: split`）、`--media-meta` 图片头解析、`rules:` 仓库规则校验、Workspace 扫描、`usage.capture` 与 `--no-thinking`；修复 `keep` 标题重复、`×` 分辨率溯源与缓存失效问题。 |
 | **2026-10-21** | 用 Rust 完整重写：事实扫描、章节预设、校验器、keep 区块，以及可选的 llama.cpp 散文生成。Python 与 Bash 实现移入 legacy/。 |
 <!-- readme-gen:section:zh:changelog:end -->
 
@@ -493,4 +515,4 @@ Auto-Generate-Readme/
 
 ---
 
-*Generated by [readme-gen](https://github.com/TheRealMilesLee/Auto-Generate-Readme) v0.1.0 from repository facts. Facts hash: `bbbaf0332f57`.*
+*Generated by [readme-gen](https://github.com/TheRealMilesLee/Auto-Generate-Readme) v0.1.0 from repository facts. Facts hash: `0b48bd016fc3`.*

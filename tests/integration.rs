@@ -400,3 +400,164 @@ fn showcase_features_and_multiplication_resolution_validate() {
     assert!(report.is_ok(), "{:?}", report.errors);
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
+
+#[test]
+fn split_bilingual_build_and_validate() {
+    use readme_gen::lang::LocaleMode;
+    let dir = fixture("split-bilingual");
+    let facts = scan::scan(&options(dir.path())).unwrap();
+    let mut config = Config::default();
+    config.locale_mode = LocaleMode::Split;
+    config.locales = vec![Lang::En, Lang::Zh];
+    config
+        .sections
+        .insert("why".to_string(), Loc::both("Fast and clean.", "又快又干净。"));
+
+    let files = render::build_split_files(
+        &Ctx {
+            facts: &facts,
+            config: &config,
+            generated: &Default::default(),
+            keeps: &Default::default(),
+            locales: &[Lang::En, Lang::Zh],
+            preset: readme_gen::outline::Preset::Cli,
+            version: "0.1.0",
+        },
+        None,
+    );
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].1, "README.md");
+    assert_eq!(files[1].1, "README.zh.md");
+    assert!(files[0].2.contains("README.zh.md"));
+    assert!(files[1].2.contains("README.md"));
+
+    dir.write("README.md", files[0].2.as_bytes());
+    dir.write("README.zh.md", files[1].2.as_bytes());
+
+    let p_en = dir.path().join("README.md");
+    let p_zh = dir.path().join("README.zh.md");
+    let report = validate::validate_split(
+        &[
+            (Lang::En, files[0].2.as_str(), p_en.as_path()),
+            (Lang::Zh, files[1].2.as_str(), p_zh.as_path()),
+        ],
+        &facts,
+        &config,
+    );
+    assert!(report.is_ok(), "{:?}", report.errors);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
+fn rules_and_hygiene_catch_violations() {
+    let dir = fixture("rules");
+    dir.write("nested/sub/pic.png", &[0u8; 64]);
+    fs::create_dir_all(dir.path().join("empty_shelf")).unwrap();
+
+    let facts = scan::scan(&options(dir.path())).unwrap();
+    let mut config = Config::default();
+    config.rules.max_dir_depth = Some(1);
+    config.rules.forbid_exts = vec!["png".to_string()];
+    config.rules.no_empty_dirs = true;
+    config.unknown_keys.push("bogus_key".to_string());
+    config
+        .dirs
+        .insert("ghost_dir".to_string(), Default::default());
+
+    let mut report = validate::Report::default();
+    validate::check_rules(&facts, &config, &mut report);
+    validate::check_config_hygiene(&facts, &config, &mut report);
+
+    assert!(report.errors.iter().any(|e| e.contains("max_dir_depth")));
+    assert!(report.errors.iter().any(|e| e.contains(".png")));
+    assert!(report.errors.iter().any(|e| e.contains("empty_shelf")));
+    assert!(report.warnings.iter().any(|w| w.contains("bogus_key")));
+    assert!(report.warnings.iter().any(|w| w.contains("ghost_dir")));
+}
+
+#[test]
+fn media_meta_probes_png_headers() {
+    let dir = fixture("media-meta");
+    let mut png = Vec::new();
+    png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(b"IHDR");
+    png.extend_from_slice(&3840u32.to_be_bytes());
+    png.extend_from_slice(&2160u32.to_be_bytes());
+    dir.write("wallpapers/hero.png", &png);
+
+    let facts = scan::scan(&ScanOptions {
+        root: dir.path().to_path_buf(),
+        media_meta: true,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let media = facts.media.expect("media summary should be present");
+    assert_eq!(media.measured_images, 1);
+    assert_eq!(media.max_width, 3840);
+    assert_eq!(media.max_height, 2160);
+    assert_eq!(media.uhd_4k, 1);
+}
+
+#[test]
+fn workspace_scan_discovers_cargo_members() {
+    let dir = TempDir::new("workspace");
+    dir.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers = [\"crates/*\"]\n",
+    );
+    dir.write(
+        "crates/alpha/Cargo.toml",
+        b"[package]\nname = \"alpha\"\nversion = \"0.2.0\"\ndescription = \"Alpha crate\"\n\n[dependencies]\nfoo = \"1.0\"\n",
+    );
+    dir.write("crates/alpha/src/lib.rs", b"pub fn a() {}\n");
+
+    let facts = scan::scan(&options(dir.path())).unwrap();
+    assert_eq!(facts.workspaces.len(), 1);
+    assert_eq!(facts.workspaces[0].name, "alpha");
+    assert_eq!(facts.workspaces[0].version.as_deref(), Some("0.2.0"));
+    assert!(facts.deps.iter().any(|d| d.name == "foo"));
+}
+
+#[test]
+fn diff_adopt_and_doctor_cli_end_to_end() {
+    let dir = fixture("cli-extra");
+    dir.write(
+        "README.md",
+        b"# demo\n\n## Usage\n\nCustom legacy usage instructions.\n",
+    );
+    let root = dir.path().to_str().unwrap();
+    let binary = env!("CARGO_BIN_EXE_readme-gen");
+
+    let adopt = Command::new(binary)
+        .args(["adopt", "--root", root])
+        .output()
+        .unwrap();
+    assert!(
+        adopt.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&adopt.stderr)
+    );
+    let adopted_readme = fs::read_to_string(dir.path().join("README.md")).unwrap();
+    assert!(adopted_readme.contains("<!-- readme-gen:keep:en:usage:start -->"));
+    assert!(adopted_readme.contains("Custom legacy usage instructions."));
+    assert!(dir.path().join("readme.yml").exists());
+
+    let diff = Command::new(binary)
+        .args(["diff", "--root", root])
+        .output()
+        .unwrap();
+    assert!(diff.status.success());
+
+    let doctor = Command::new(binary)
+        .args(["doctor", "--root", root])
+        .output()
+        .unwrap();
+    assert!(
+        doctor.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+}

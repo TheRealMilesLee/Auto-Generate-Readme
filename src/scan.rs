@@ -5,7 +5,7 @@
 //! licence, README hashing), and never shells out to `find`, `tree` or `du`, so
 //! it behaves the same on macOS, Linux and Windows (Git Bash / PowerShell).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,6 +13,7 @@ use std::process::Command;
 use crate::error::{Error, Result};
 use crate::glob::GlobSet;
 use crate::json::Json;
+use crate::media;
 use crate::sha256;
 use crate::util::{human_size, read_text_lossy};
 
@@ -49,6 +50,8 @@ pub struct ScanOptions {
     pub max_files: usize,
     /// Depth of the rendered tree (1 = project root + first level).
     pub tree_depth: usize,
+    /// Probe image headers (first 64 KiB) for pixel dimensions.
+    pub media_meta: bool,
 }
 
 impl Default for ScanOptions {
@@ -60,6 +63,7 @@ impl Default for ScanOptions {
             max_depth: 16,
             max_files: 200_000,
             tree_depth: 2,
+            media_meta: false,
         }
     }
 }
@@ -111,6 +115,8 @@ pub struct LanguageStat {
 pub struct DirStats {
     pub path: String,
     pub depth: usize,
+    pub max_depth: usize,
+    pub subdirs: u64,
     pub files: u64,
     pub bytes: u64,
     pub images: u64,
@@ -122,6 +128,29 @@ impl DirStats {
     pub fn size_human(&self) -> String {
         human_size(self.bytes)
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MediaSummary {
+    pub measured_images: u64,
+    pub max_width: u32,
+    pub max_height: u32,
+    pub max_pixels: u64,
+    pub max_file: Option<String>,
+    pub landscape: u64,
+    pub portrait: u64,
+    pub square: u64,
+    pub ultrawide: u64,
+    pub uhd_4k: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspacePackage {
+    pub name: String,
+    pub path: String,
+    pub version: Option<String>,
+    pub description: String,
+    pub ecosystem: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +199,10 @@ pub struct Facts {
     pub license_file: Option<String>,
     pub counts: Counts,
     pub sizes: Sizes,
+    pub exts: BTreeMap<String, u64>,
+    pub empty_dirs: Vec<String>,
+    pub media: Option<MediaSummary>,
+    pub workspaces: Vec<WorkspacePackage>,
     pub languages: Vec<LanguageStat>,
     pub dirs: Vec<DirStats>,
     pub tree: String,
@@ -234,7 +267,8 @@ pub fn scan(options: &ScanOptions) -> Result<Facts> {
     let description = detect_description(&root);
     let version = detect_version(&root);
     let (license, license_file) = detect_license(&root);
-    let deps = detect_dependencies(&root);
+    let workspaces = detect_workspaces(&root);
+    let deps = detect_dependencies(&root, &workspaces);
     let readme = detect_readme(&root);
     let git = detect_git(&root);
 
@@ -252,6 +286,12 @@ pub fn scan(options: &ScanOptions) -> Result<Facts> {
         None
     };
 
+    let media = if options.media_meta && walker.media.measured_images > 0 {
+        Some(walker.media)
+    } else {
+        None
+    };
+
     let kind = detect_kind(&root, &counts, &walker.entrypoints, &languages);
 
     let mut facts = Facts {
@@ -264,6 +304,10 @@ pub fn scan(options: &ScanOptions) -> Result<Facts> {
         license_file,
         counts,
         sizes: walker.sizes,
+        exts: walker.exts,
+        empty_dirs: walker.empty_dirs,
+        media,
+        workspaces,
         languages,
         dirs,
         tree,
@@ -292,6 +336,9 @@ struct Walker<'a> {
     globs: GlobSet,
     counts: Counts,
     sizes: Sizes,
+    exts: BTreeMap<String, u64>,
+    empty_dirs: Vec<String>,
+    media: MediaSummary,
     agg: HashMap<String, DirStats>,
     languages: HashMap<&'static str, (u64, u64)>,
     entrypoints: Vec<String>,
@@ -307,6 +354,9 @@ impl<'a> Walker<'a> {
             globs,
             counts: Counts::default(),
             sizes: Sizes::default(),
+            exts: BTreeMap::new(),
+            empty_dirs: Vec::new(),
+            media: MediaSummary::default(),
             agg: HashMap::new(),
             languages: HashMap::new(),
             entrypoints: Vec::new(),
@@ -371,6 +421,7 @@ impl<'a> Walker<'a> {
         });
 
         let build_tree_children = depth < self.options.tree_depth;
+        let mut kept_entries = 0usize;
 
         for (path, name, metadata) in items {
             let child_rel = if rel.is_empty() {
@@ -387,17 +438,25 @@ impl<'a> Walker<'a> {
                 if self.globs.is_ignored(&child_rel, true) {
                     continue;
                 }
+                kept_entries += 1;
                 self.counts.dirs += 1;
                 if depth + 1 <= self.options.catalog_depth {
                     self.agg.entry(child_rel.clone()).or_insert_with(|| DirStats {
                         path: child_rel.clone(),
                         depth: depth + 1,
+                        max_depth: depth + 1,
+                        subdirs: 0,
                         files: 0,
                         bytes: 0,
                         images: 0,
                         videos: 0,
                         exts: BTreeMap::new(),
                     });
+                } else if let Some(top) = child_rel.split('/').next() {
+                    if let Some(stats) = self.agg.get_mut(top) {
+                        stats.subdirs += 1;
+                        stats.max_depth = stats.max_depth.max(depth + 1);
+                    }
                 }
                 if depth + 1 == 1 {
                     let lower = name.to_lowercase();
@@ -417,6 +476,7 @@ impl<'a> Walker<'a> {
                 if self.globs.is_ignored(&child_rel, false) {
                     continue;
                 }
+                kept_entries += 1;
                 self.counts.files += 1;
                 if self.counts.files > self.options.max_files as u64 {
                     return Err(Error::new(format!(
@@ -431,12 +491,40 @@ impl<'a> Walker<'a> {
                     .extension()
                     .map(|ext| ext.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
+                if !ext.is_empty() {
+                    *self.exts.entry(ext.clone()).or_insert(0) += 1;
+                }
                 let is_image = IMAGE_EXTS.contains(&ext.as_str());
                 let is_video = VIDEO_EXTS.contains(&ext.as_str());
                 if is_image {
                     self.counts.images += 1;
                     self.sizes.image_bytes += bytes;
                     self.sizes.media_bytes += bytes;
+                    if self.options.media_meta {
+                        if let Some(dims) = media::probe_dimensions(&path, &ext) {
+                            self.media.measured_images += 1;
+                            let pixels = dims.pixels();
+                            if pixels > self.media.max_pixels {
+                                self.media.max_pixels = pixels;
+                                self.media.max_width = dims.width;
+                                self.media.max_height = dims.height;
+                                self.media.max_file = Some(child_rel.clone());
+                            }
+                            if dims.is_ultrawide() {
+                                self.media.ultrawide += 1;
+                            }
+                            if dims.is_4k_or_higher() {
+                                self.media.uhd_4k += 1;
+                            }
+                            if dims.width > dims.height {
+                                self.media.landscape += 1;
+                            } else if dims.is_portrait() {
+                                self.media.portrait += 1;
+                            } else {
+                                self.media.square += 1;
+                            }
+                        }
+                    }
                 } else if is_video {
                     self.counts.videos += 1;
                     self.sizes.video_bytes += bytes;
@@ -472,6 +560,9 @@ impl<'a> Walker<'a> {
                     }
                 }
             }
+        }
+        if depth >= 1 && kept_entries == 0 && !rel.is_empty() {
+            self.empty_dirs.push(rel.to_string());
         }
         Ok(node)
     }
@@ -966,9 +1057,154 @@ fn detect_kind(
     ProjectKind::App
 }
 
-fn detect_dependencies(root: &Path) -> Vec<Dependency> {
+fn detect_workspaces(root: &Path) -> Vec<WorkspacePackage> {
+    let mut packages = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    if let Ok(text) = fs::read_to_string(root.join("Cargo.toml")) {
+        let mut in_workspace = false;
+        let mut in_members = false;
+        let mut patterns = Vec::new();
+        for line in text.lines() {
+            let line = strip_toml_comment(line).trim();
+            if line.starts_with('[') {
+                in_workspace = line == "[workspace]";
+                in_members = false;
+                continue;
+            }
+            if !in_workspace {
+                continue;
+            }
+            if line.starts_with("members") && line.contains('[') {
+                in_members = true;
+            }
+            if in_members {
+                for quote in ['"', '\''] {
+                    let mut rest = line;
+                    while let Some(start) = rest.find(quote) {
+                        let after = &rest[start + 1..];
+                        if let Some(end) = after.find(quote) {
+                            let pat = after[..end].trim();
+                            if !pat.is_empty() {
+                                patterns.push(pat.to_string());
+                            }
+                            rest = &after[end + 1..];
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                if line.contains(']') {
+                    in_members = false;
+                }
+            }
+        }
+        for member_dir in expand_workspace_patterns(root, &patterns) {
+            let member_root = root.join(&member_dir);
+            if member_root.join("Cargo.toml").is_file() && seen.insert(member_dir.clone()) {
+                let name = read_cargo_field(&member_root, "name").unwrap_or_else(|| member_dir.clone());
+                let version = read_cargo_field(&member_root, "version");
+                let description = read_cargo_field(&member_root, "description").unwrap_or_default();
+                packages.push(WorkspacePackage {
+                    name,
+                    path: member_dir,
+                    version,
+                    description,
+                    ecosystem: "rust",
+                });
+            }
+        }
+    }
+
+    if let Ok(text) = fs::read_to_string(root.join("package.json")) {
+        if let Ok(value) = crate::json::parse(&text) {
+            let mut patterns = Vec::new();
+            if let Some(arr) = value.get("workspaces").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        patterns.push(s.to_string());
+                    }
+                }
+            } else if let Some(arr) = value
+                .get("workspaces")
+                .and_then(|v| v.get("packages"))
+                .and_then(|v| v.as_array())
+            {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        patterns.push(s.to_string());
+                    }
+                }
+            }
+            for member_dir in expand_workspace_patterns(root, &patterns) {
+                let member_root = root.join(&member_dir);
+                if member_root.join("package.json").is_file() && seen.insert(member_dir.clone()) {
+                    let name = read_package_json_field(&member_root, "name")
+                        .unwrap_or_else(|| member_dir.clone());
+                    let version = read_package_json_field(&member_root, "version");
+                    let description =
+                        read_package_json_field(&member_root, "description").unwrap_or_default();
+                    packages.push(WorkspacePackage {
+                        name,
+                        path: member_dir,
+                        version,
+                        description,
+                        ecosystem: "node",
+                    });
+                }
+            }
+        }
+    }
+
+    packages.sort_by(|a, b| a.path.cmp(&b.path));
+    packages
+}
+
+fn expand_workspace_patterns(root: &Path, patterns: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in patterns {
+        let pat = raw.trim().trim_end_matches('/');
+        if pat.is_empty() || pat.starts_with('!') {
+            continue;
+        }
+        if let Some(prefix) = pat.strip_suffix("/*") {
+            let base = root.join(prefix);
+            if let Ok(entries) = fs::read_dir(&base) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    if entry.path().is_dir() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if !name.starts_with('.') {
+                            out.push(format!("{prefix}/{name}"));
+                        }
+                    }
+                }
+            }
+        } else if root.join(pat).is_dir() {
+            out.push(pat.to_string());
+        }
+    }
+    out
+}
+
+fn detect_dependencies(root: &Path, workspaces: &[WorkspacePackage]) -> Vec<Dependency> {
     let mut deps: Vec<Dependency> = Vec::new();
     let mut seen: HashMap<String, ()> = HashMap::new();
+    collect_deps_from_dir(root, &mut deps, &mut seen);
+    for pkg in workspaces {
+        if deps.len() >= 40 {
+            break;
+        }
+        collect_deps_from_dir(&root.join(&pkg.path), &mut deps, &mut seen);
+    }
+    deps.truncate(40);
+    deps
+}
+
+fn collect_deps_from_dir(
+    root: &Path,
+    deps: &mut Vec<Dependency>,
+    seen: &mut HashMap<String, ()>,
+) {
     let mut push = |name: String, spec: String, ecosystem: &'static str| {
         let key = format!("{ecosystem}:{name}");
         if seen.insert(key, ()).is_none() && !name.is_empty() {
@@ -1118,9 +1354,6 @@ fn detect_dependencies(root: &Path) -> Vec<Dependency> {
             }
         }
     }
-
-    deps.truncate(40);
-    deps
 }
 
 fn extract_inline_table_version(raw: &str) -> Option<String> {
@@ -1219,6 +1452,8 @@ impl Facts {
             let mut item = Json::obj();
             item.push("path", dir.path.clone());
             item.push("depth", dir.depth);
+            item.push("max_depth", dir.max_depth);
+            item.push("subdirs", dir.subdirs);
             item.push("files", dir.files);
             item.push("images", dir.images);
             item.push("videos", dir.videos);
@@ -1232,6 +1467,51 @@ impl Facts {
             dirs.push_value(item);
         }
         root.push("dirs", dirs);
+
+        let mut exts = Json::obj();
+        for (ext, count) in &self.exts {
+            exts.push(ext.clone(), *count);
+        }
+        root.push("exts", exts);
+
+        let mut empty_dirs = Json::arr();
+        for dir in &self.empty_dirs {
+            empty_dirs.push_value(dir.clone());
+        }
+        root.push("empty_dirs", empty_dirs);
+
+        let media = match &self.media {
+            Some(m) => {
+                let mut item = Json::obj();
+                item.push("measured_images", m.measured_images);
+                item.push("max_width", u64::from(m.max_width));
+                item.push("max_height", u64::from(m.max_height));
+                if m.max_width > 0 && m.max_height > 0 {
+                    item.push("max_resolution", format!("{}×{}", m.max_width, m.max_height));
+                }
+                item.push("max_file", m.max_file.clone());
+                item.push("landscape", m.landscape);
+                item.push("portrait", m.portrait);
+                item.push("square", m.square);
+                item.push("ultrawide", m.ultrawide);
+                item.push("uhd_4k", m.uhd_4k);
+                item
+            }
+            None => Json::Null,
+        };
+        root.push("media", media);
+
+        let mut workspaces = Json::arr();
+        for pkg in &self.workspaces {
+            let mut item = Json::obj();
+            item.push("name", pkg.name.clone());
+            item.push("path", pkg.path.clone());
+            item.push("version", pkg.version.clone());
+            item.push("description", pkg.description.clone());
+            item.push("ecosystem", pkg.ecosystem);
+            workspaces.push_value(item);
+        }
+        root.push("workspaces", workspaces);
 
         let mut deps = Json::arr();
         for dep in &self.deps {
@@ -1351,6 +1631,8 @@ impl Facts {
         for dir in &self.dirs {
             let mut item = Json::obj();
             item.push("path", dir.path.clone());
+            item.push("max_depth", dir.max_depth);
+            item.push("subdirs", dir.subdirs);
             item.push("files", dir.files);
             item.push("images", dir.images);
             item.push("videos", dir.videos);
@@ -1358,6 +1640,37 @@ impl Facts {
             dirs.push_value(item);
         }
         root.push("dirs", dirs);
+
+        let mut exts = Json::obj();
+        for (ext, count) in &self.exts {
+            exts.push(ext.clone(), *count);
+        }
+        root.push("exts", exts);
+
+        let mut empty_dirs = Json::arr();
+        for dir in &self.empty_dirs {
+            empty_dirs.push_value(dir.clone());
+        }
+        root.push("empty_dirs", empty_dirs);
+
+        if let Some(m) = &self.media {
+            let mut mj = Json::obj();
+            mj.push("measured_images", m.measured_images);
+            mj.push("max_width", u64::from(m.max_width));
+            mj.push("max_height", u64::from(m.max_height));
+            mj.push("landscape", m.landscape);
+            mj.push("portrait", m.portrait);
+            mj.push("square", m.square);
+            mj.push("ultrawide", m.ultrawide);
+            mj.push("uhd_4k", m.uhd_4k);
+            root.push("media", mj);
+        }
+
+        let mut workspaces = Json::arr();
+        for pkg in &self.workspaces {
+            workspaces.push_value(format!("{}:{}@{}", pkg.ecosystem, pkg.name, pkg.path));
+        }
+        root.push("workspaces", workspaces);
 
         let mut deps = Json::arr();
         for dep in &self.deps {

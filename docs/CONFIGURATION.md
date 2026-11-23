@@ -43,7 +43,8 @@ readme-gen check --strict  # CI-friendly validation
 | Key | Type | Description |
 |---|---|---|
 | `preset` | string | `library`, `cli`, `app`, `dataset`, `showcase`. Defaults to the detected project kind. |
-| `locale` | list | `[en]`, `[zh]`, or `[en, zh]` for a split bilingual document. |
+| `locale` | list | `[en]`, `[zh]`, or `[en, zh]` for a bilingual document. |
+| `locale_mode` | string | `single` (one combined file) or `split` (`README.md` + `README.<lang>.md`). |
 | `project` | map | Name, tagline, description, author, licence override. |
 | `nav` | list | Extra quick-jump links (`label`, `href`) in the top navigation bar. |
 | `announcements` | list | GitHub alert callouts (`kind`, `date`, `text`) shown above the content. |
@@ -60,11 +61,14 @@ readme-gen check --strict  # CI-friendly validation
 | `cta` | map | Star/fork call to action (`top`, `star`, `fork`, `text`). |
 | `catalog.order` | list | Preferred folder order for the catalogue. |
 | `catalog.groups` | list | Named folder groups (`name`, `dirs`) for the catalog overview table. |
+| `rules` | map | Repo invariants (`max_dir_depth`, `forbid_exts`, `no_empty_dirs`, `require_dir_annotations`). |
+| `usage.capture` | string | Local command (e.g. `./target/release/tool --help`) captured into `Usage`. |
+| `scan.media_meta` | bool | Probe image headers (PNG/JPEG/WebP/GIF/BMP) for resolution stats (default `false`). |
 | `exclude` | list | Extra gitignore-style patterns for the scanner. |
 | `badges.style` | string | Shields.io style (`flat`, `for-the-badge`, …). |
 | `badges.links` | bool | Wrap GitHub/license badges in clickable links (default `true`). |
 | `credit` | bool | Append the generator credit line (default `true`). |
-| `llm` | map | Default endpoint/model/temperature for prose generation. |
+| `llm` | map | Default endpoint/model/temperature/`no_thinking` for prose generation. |
 
 ## Project
 

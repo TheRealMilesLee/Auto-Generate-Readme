@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::annotations::Config;
-use crate::lang::Lang;
+use crate::lang::{Lang, LocaleMode};
 use crate::outline::{self, Preset, SectionKind, SectionSpec};
 use crate::scan::{Facts, ProjectKind};
 use crate::util::{escape_html, format_count, url_encode};
@@ -25,6 +25,12 @@ pub struct Ctx<'a> {
     pub version: &'a str,
 }
 
+#[derive(Debug, Default)]
+pub struct BuildOptions<'a> {
+    pub captured_usage: Option<&'a str>,
+    pub locale_mode: LocaleMode,
+}
+
 struct Rendered {
     id: &'static str,
     title: &'static str,
@@ -32,8 +38,63 @@ struct Rendered {
 }
 
 pub fn build(ctx: &Ctx<'_>) -> String {
+    build_with_options(
+        ctx,
+        &BuildOptions {
+            captured_usage: None,
+            locale_mode: ctx.config.locale_mode,
+        },
+    )
+}
+
+pub fn build_with_options(ctx: &Ctx<'_>, opts: &BuildOptions<'_>) -> String {
+    build_internal(ctx, opts.captured_usage, opts.locale_mode, None, ctx.locales)
+}
+
+/// Render one file per locale (`README.md` for primary, `README.<lang>.md` for others).
+pub fn build_split_files(
+    ctx: &Ctx<'_>,
+    captured_usage: Option<&str>,
+) -> Vec<(Lang, String, String)> {
+    let mut files = Vec::new();
+    let all_locales = ctx.locales;
+    for (idx, &lang) in all_locales.iter().enumerate() {
+        let filename = if idx == 0 {
+            "README.md".to_string()
+        } else {
+            format!("README.{}.md", lang.as_str())
+        };
+        let single_locale = [lang];
+        let single_ctx = Ctx {
+            facts: ctx.facts,
+            config: ctx.config,
+            generated: ctx.generated,
+            keeps: ctx.keeps,
+            locales: &single_locale,
+            preset: ctx.preset,
+            version: ctx.version,
+        };
+        let content = build_internal(
+            &single_ctx,
+            captured_usage,
+            LocaleMode::Split,
+            Some(lang),
+            all_locales,
+        );
+        files.push((lang, filename, content));
+    }
+    files
+}
+
+fn build_internal(
+    ctx: &Ctx<'_>,
+    captured_usage: Option<&str>,
+    locale_mode: LocaleMode,
+    split_current: Option<Lang>,
+    all_locales: &[Lang],
+) -> String {
     let mut out = String::new();
-    out.push_str(&meta_line(ctx));
+    out.push_str(&meta_line(ctx, locale_mode));
     out.push('\n');
     out.push_str(&hero(ctx));
     out.push('\n');
@@ -50,7 +111,7 @@ pub fn build(ctx: &Ctx<'_>) -> String {
         out.push('\n');
     }
 
-    let nav = language_nav(ctx);
+    let nav = language_nav(ctx, split_current, all_locales);
     if !nav.is_empty() {
         out.push_str(&nav);
         out.push('\n');
@@ -73,7 +134,7 @@ pub fn build(ctx: &Ctx<'_>) -> String {
             };
             out.push_str(&format!("<a id=\"{anchor}\"></a>\n## {heading}\n\n"));
         }
-        out.push_str(&render_language(ctx, *lang));
+        out.push_str(&render_language(ctx, *lang, captured_usage));
         out.push('\n');
     }
 
@@ -81,12 +142,13 @@ pub fn build(ctx: &Ctx<'_>) -> String {
     crate::util::collapse_blank_lines(&out).trim().to_string() + "\n"
 }
 
-fn meta_line(ctx: &Ctx<'_>) -> String {
+fn meta_line(ctx: &Ctx<'_>, locale_mode: LocaleMode) -> String {
     let mut meta = crate::json::Json::obj();
     meta.push("schema", 1u64);
     meta.push("facts", ctx.facts.hash.clone());
     meta.push("config", ctx.config.content_hash());
     meta.push("preset", ctx.preset.as_str());
+    meta.push("locale_mode", locale_mode.as_str());
     let mut locales = crate::json::Json::arr();
     for lang in ctx.locales {
         locales.push_value(lang.as_str());
@@ -344,9 +406,24 @@ fn badge_escape(value: &str) -> String {
     url_encode(&escaped)
 }
 
-fn language_nav(ctx: &Ctx<'_>) -> String {
+fn language_nav(ctx: &Ctx<'_>, split_current: Option<Lang>, all_locales: &[Lang]) -> String {
     let mut links = Vec::new();
-    if ctx.locales.len() > 1 {
+    if let Some(current) = split_current {
+        if all_locales.len() > 1 {
+            for (idx, &lang) in all_locales.iter().enumerate() {
+                if lang == current {
+                    links.push(format!("<strong>{}</strong>", lang.label()));
+                } else {
+                    let target = if idx == 0 {
+                        "README.md".to_string()
+                    } else {
+                        format!("README.{}.md", lang.as_str())
+                    };
+                    links.push(format!("<a href=\"{target}\">{}</a>", lang.label()));
+                }
+            }
+        }
+    } else if ctx.locales.len() > 1 {
         for lang in ctx.locales {
             let anchor = match lang {
                 Lang::En => "english",
@@ -441,7 +518,7 @@ fn sub_heading_prefix(ctx: &Ctx<'_>) -> &'static str {
     }
 }
 
-fn render_language(ctx: &Ctx<'_>, lang: Lang) -> String {
+fn render_language(ctx: &Ctx<'_>, lang: Lang, captured_usage: Option<&str>) -> String {
     let specs = outline::sections(ctx.preset);
     let mut rendered: Vec<Rendered> = Vec::new();
     let mut consumed_keeps: HashSet<&str> = HashSet::new();
@@ -453,7 +530,7 @@ fn render_language(ctx: &Ctx<'_>, lang: Lang) -> String {
         if keep_body(ctx, lang, spec.id).is_some() {
             consumed_keeps.insert(spec.id);
         }
-        if let Some(body) = render_section(ctx, *spec, lang) {
+        if let Some(body) = render_section(ctx, *spec, lang, captured_usage) {
             if !body.trim().is_empty() {
                 rendered.push(Rendered {
                     id: spec.id,
@@ -561,7 +638,12 @@ fn keep_body(ctx: &Ctx<'_>, lang: Lang, id: &str) -> Option<String> {
         .cloned()
 }
 
-fn render_section(ctx: &Ctx<'_>, spec: SectionSpec, lang: Lang) -> Option<String> {
+fn render_section(
+    ctx: &Ctx<'_>,
+    spec: SectionSpec,
+    lang: Lang,
+    captured_usage: Option<&str>,
+) -> Option<String> {
     if let Some(keep) = keep_body(ctx, lang, spec.id) {
         return Some(format!(
             "<!-- readme-gen:keep:{}:{}:start -->\n{}\n<!-- readme-gen:keep:{}:{}:end -->",
@@ -578,11 +660,11 @@ fn render_section(ctx: &Ctx<'_>, spec: SectionSpec, lang: Lang) -> Option<String
         SectionKind::Packs => packs(ctx, lang),
         SectionKind::Numbers => numbers(ctx, lang),
         SectionKind::Catalog => catalog(ctx, lang),
-        SectionKind::Structure => structure(ctx),
+        SectionKind::Structure => structure(ctx, lang),
         SectionKind::Setup => setup(ctx, lang),
         SectionKind::Tooling => tooling(ctx, lang),
         SectionKind::Install => install(ctx, lang),
-        SectionKind::Usage => usage(ctx, lang),
+        SectionKind::Usage => usage(ctx, lang, captured_usage),
         SectionKind::Deps => deps(ctx, lang),
         SectionKind::Sources => sources(ctx, lang),
         SectionKind::Compatibility => compatibility(ctx, lang),
@@ -770,6 +852,77 @@ fn numbers(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
         rows.push((
             t(lang, "Test files", "测试文件").to_string(),
             format_count(tests.files),
+        ));
+    }
+    if !facts.exts.is_empty() && (facts.counts.images + facts.counts.videos) > 0 {
+        let mut sorted: Vec<(&String, &u64)> = facts.exts.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let fmt_str = sorted
+            .into_iter()
+            .take(5)
+            .map(|(ext, count)| format!("{} ({})", ext.to_uppercase(), format_count(*count)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        rows.push((t(lang, "Formats", "格式分布").to_string(), fmt_str));
+    }
+    if !facts.dirs.is_empty() && (facts.counts.images + facts.counts.videos) > 0 {
+        let max_depth = facts.dirs.iter().map(|d| d.max_depth).max().unwrap_or(1);
+        let depth_str = if max_depth == 1 {
+            t(lang, "1 level (flat)", "1 级（扁平目录）").to_string()
+        } else {
+            match lang {
+                Lang::En => format!("up to {max_depth} levels"),
+                Lang::Zh => format!("最多 {max_depth} 级"),
+            }
+        };
+        rows.push((t(lang, "Folder depth", "目录深度").to_string(), depth_str));
+    }
+    if let Some(media) = &facts.media {
+        if media.max_width > 0 && media.max_height > 0 {
+            rows.push((
+                t(lang, "Max resolution", "最高分辨率").to_string(),
+                format!("{}×{}", media.max_width, media.max_height),
+            ));
+        }
+        let mut aspect_parts = Vec::new();
+        if media.landscape > 0 {
+            aspect_parts.push(format!(
+                "{} {}",
+                format_count(media.landscape),
+                t(lang, "landscape", "横屏")
+            ));
+        }
+        if media.ultrawide > 0 {
+            aspect_parts.push(format!(
+                "{} {}",
+                format_count(media.ultrawide),
+                t(lang, "ultrawide", "超宽")
+            ));
+        }
+        if media.portrait > 0 {
+            aspect_parts.push(format!(
+                "{} {}",
+                format_count(media.portrait),
+                t(lang, "portrait", "竖屏")
+            ));
+        }
+        if media.uhd_4k > 0 {
+            aspect_parts.push(format!(
+                "{} 4K+",
+                format_count(media.uhd_4k)
+            ));
+        }
+        if !aspect_parts.is_empty() {
+            rows.push((
+                t(lang, "Dimensions", "画幅分布").to_string(),
+                aspect_parts.join(" · "),
+            ));
+        }
+    }
+    if !facts.workspaces.is_empty() {
+        rows.push((
+            t(lang, "Workspace packages", "工作区成员").to_string(),
+            format_count(facts.workspaces.len() as u64),
         ));
     }
     for extra in &ctx.config.numbers_extra {
@@ -1026,15 +1179,41 @@ fn tooling(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
     ))
 }
 
-fn structure(ctx: &Ctx<'_>) -> Option<String> {
+fn structure(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
     if ctx.facts.tree.trim().is_empty() {
         return None;
     }
     let fence = fence_for(&ctx.facts.tree);
-    Some(format!(
+    let mut out = format!(
         "{fence}text\n{}\n{fence}",
         ctx.facts.tree.trim_end()
-    ))
+    );
+    if !ctx.facts.workspaces.is_empty() {
+        let mut rows = Vec::new();
+        for pkg in &ctx.facts.workspaces {
+            rows.push(vec![
+                format!("`{}`", md_code(&pkg.name)),
+                format!("`{}`", md_code(&pkg.path)),
+                pkg.version.clone().unwrap_or_else(|| "—".to_string()),
+                if pkg.description.is_empty() {
+                    "—".to_string()
+                } else {
+                    pkg.description.clone()
+                },
+            ]);
+        }
+        out.push_str("\n\n");
+        out.push_str(&table(
+            &[
+                t(lang, "Package", "成员包"),
+                t(lang, "Path", "路径"),
+                t(lang, "Version", "版本"),
+                t(lang, "Description", "说明"),
+            ],
+            &rows,
+        ));
+    }
+    Some(out)
 }
 
 fn install(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
@@ -1088,7 +1267,7 @@ fn install(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
     Some(out)
 }
 
-fn usage(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
+fn usage(ctx: &Ctx<'_>, lang: Lang, captured_usage: Option<&str>) -> Option<String> {
     if let Some(body) = ctx
         .config
         .sections
@@ -1096,6 +1275,21 @@ fn usage(ctx: &Ctx<'_>, lang: Lang) -> Option<String> {
         .and_then(|loc| loc.get(lang))
     {
         return Some(body.to_string());
+    }
+    if let Some(help) = captured_usage {
+        let trimmed = help.trim();
+        if !trimmed.is_empty() {
+            let fence = fence_for(trimmed);
+            let mut out = String::new();
+            out.push_str(t(
+                lang,
+                "Command-line reference:",
+                "命令行参考：",
+            ));
+            out.push_str("\n\n");
+            out.push_str(&format!("{fence}text\n{trimmed}\n{fence}\n"));
+            return Some(out);
+        }
     }
     let facts = ctx.facts;
     let entry = facts.entrypoints.first()?;
